@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI Email Assistant</title>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; background: #0f1419; color: #e6edf3; }
+    h1 { font-size: 1.25rem; }
+    .meta { font-size: 0.85rem; color: #8b949e; margin-bottom: 1rem; }
+    textarea { width: 100%; min-height: 72px; padding: 0.75rem; border-radius: 8px; border: 1px solid #30363d; background: #161b22; color: #e6edf3; }
+    .row { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
+    button { padding: 0.5rem 1rem; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; }
+    .primary { background: #238636; color: #fff; }
+    .secondary { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    #out { margin-top: 1.5rem; white-space: pre-wrap; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; min-height: 120px; }
+    .disclaimer { font-size: 0.8rem; color: #8b949e; margin-top: 1.5rem; line-height: 1.4; }
+  </style>
+</head>
+<body>
+  <h1>AI Email Assistant</h1>
+  <p class="meta" id="cacheMeta">Last updated: —</p>
+  <label for="q">Your question</label>
+  <textarea id="q" placeholder="e.g. Summarize today's emails"></textarea>
+  <div class="row">
+    <button class="primary" id="send">Send</button>
+    <button class="secondary" id="refresh">Refresh emails</button>
+  </div>
+  <div id="out"></div>
+  <p class="disclaimer">
+    Replies use the emails loaded from the server (recent batch, up to the configured limit), not your full mailbox history.
+  </p>
+  <script>
+    const out = document.getElementById("out");
+    const q = document.getElementById("q");
+    const send = document.getElementById("send");
+    const refresh = document.getElementById("refresh");
+    const cacheMeta = document.getElementById("cacheMeta");
+    let lastCacheAgeBase = null;
+    let lastUiTick = null;
+
+    function setCacheLine(ageSeconds) {
+      lastCacheAgeBase = ageSeconds;
+      lastUiTick = Date.now();
+      const secs = Math.round(ageSeconds);
+      cacheMeta.textContent = "Last updated: " + secs + " second" + (secs === 1 ? "" : "s") + " ago";
+    }
+
+    setInterval(() => {
+      if (lastCacheAgeBase == null || lastUiTick == null) return;
+      const extra = (Date.now() - lastUiTick) / 1000;
+      const total = lastCacheAgeBase + extra;
+      const secs = Math.round(total);
+      cacheMeta.textContent = "Last updated: " + secs + " second" + (secs === 1 ? "" : "s") + " ago";
+    }, 1000);
+
+    async function doChat(forceRefresh) {
+      const query = q.value.trim();
+      if (!query) {
+        out.textContent = "Enter a question.";
+        return;
+      }
+      send.disabled = true;
+      refresh.disabled = true;
+      out.textContent = "Thinking…";
+      try {
+        const res = await fetch("/ai/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ query, force_refresh: !!forceRefresh }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          out.textContent = (data.error || data.detail || res.statusText) +
+            (data.request_id ? "\n\nrequest_id: " + data.request_id : "");
+          return;
+        }
+        out.textContent = data.response || "";
+        if (typeof data.cache_age_s === "number") {
+          setCacheLine(data.cache_age_s);
+        }
+        if (data.stale) {
+          out.textContent += "\n\n(note: served from cached emails — email API may be unavailable)";
+        }
+        if (data.request_id) {
+          out.textContent += "\n\n— request_id: " + data.request_id;
+        }
+      } catch (e) {
+        out.textContent = "Network error: " + e;
+      } finally {
+        send.disabled = false;
+        refresh.disabled = false;
+      }
+    }
+
+    send.addEventListener("click", () => doChat(false));
+    refresh.addEventListener("click", () => doChat(true));
+  </script>
+</body>
+</html>
