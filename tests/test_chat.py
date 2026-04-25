@@ -39,8 +39,7 @@ def test_chat_sender_filter_no_match(client: TestClient, patch_ask_ai: None) -> 
     )
     assert r.status_code == 200
     data = r.json()
-    assert "nobody_xyz_123@nowhere.test" in data["response"].lower()
-    assert "no emails" in data["response"].lower()
+    assert data["response"] == "Not available in current emails."
     assert data["email_count"] == 0
 
 

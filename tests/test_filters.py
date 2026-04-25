@@ -1,4 +1,4 @@
-from app.filters import extract_sender_query, filter_by_sender
+from app.filters import extract_sender_query, filter_by_sender, is_today_intent
 
 
 def test_extract_sender_query_variants() -> None:
@@ -29,3 +29,10 @@ def test_filter_by_sender_exact_email() -> None:
 def test_filter_by_sender_sender_key_fallback() -> None:
     emails = [{"id": "1", "sender": "a@b.co"}]
     assert filter_by_sender(emails, "a@b.co")[0]["id"] == "1"
+
+
+def test_is_today_intent_includes_latest_recent_new() -> None:
+    assert is_today_intent("show me latest mails") is True
+    assert is_today_intent("any recent emails?") is True
+    assert is_today_intent("new updates in inbox") is True
+    assert is_today_intent("summarize all complaints") is False

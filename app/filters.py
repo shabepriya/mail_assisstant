@@ -16,6 +16,9 @@ def is_today_intent(query: str) -> bool:
         "incoming today",
         "emails today",
         "mail today",
+        "latest",
+        "recent",
+        "new",
     )
     return any(k in q for k in keywords)
 

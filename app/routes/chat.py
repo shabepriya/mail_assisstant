@@ -114,7 +114,7 @@ async def chat(
         filtered_count = len(emails)
         if not emails:
             return ChatResponse(
-                response=f"No emails from {sender_q} in the current batch.",
+                response="Not available in current emails.",
                 request_id=request_id,
                 email_count=0,
                 filtered_count=0,
@@ -135,6 +135,17 @@ async def chat(
         settings.max_body_chars,
         settings.trim_chunk,
     )
+    if not emails:
+        return ChatResponse(
+            response="Not available in current emails.",
+            request_id=request_id,
+            email_count=0,
+            filtered_count=filtered_count,
+            cache_age_s=cache_age_s,
+            tokens_used=0,
+            stale=stale,
+        )
+
     context = emails_to_context(emails, settings.max_body_chars)
     tokens_used = count_tokens(context, settings.openai_model) + overhead
 
