@@ -137,6 +137,10 @@ async def fetch_emails(
         params["accountId"] = settings.email_account_id
     if "category" not in existing_params:
         params["category"] = settings.email_category
+    if "maxResults" not in existing_params:
+        params["maxResults"] = str(settings.email_fetch_limit)
+    if "limit" not in existing_params:
+        params["limit"] = str(settings.email_fetch_limit)
 
     url = raw_url
 

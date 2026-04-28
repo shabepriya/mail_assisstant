@@ -8,7 +8,7 @@ from app.errors import EmailAPIError
 
 def _settings_with_key(key: bytes, encrypted: bool = True) -> Settings:
     return Settings(
-        openai_api_key="x",
+        gemini_api_key="x",
         email_payload_encrypted=encrypted,
         email_decrypt_key=key.decode("ascii"),
         email_encrypted_fields="body,subject",
@@ -52,6 +52,6 @@ def test_decrypt_if_needed_all_fail_raises() -> None:
 
 
 def test_decrypt_if_needed_missing_key_raises() -> None:
-    s = Settings(openai_api_key="x", email_payload_encrypted=True, email_decrypt_key="")
+    s = Settings(gemini_api_key="x", email_payload_encrypted=True, email_decrypt_key="")
     with pytest.raises(EmailAPIError, match="EMAIL_DECRYPT_KEY"):
         decrypt_if_needed([{"id": "1"}], s)

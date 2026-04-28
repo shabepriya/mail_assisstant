@@ -12,13 +12,19 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
-    openai_api_key: str = Field(default="", validation_alias="OPENAI_API_KEY")
-    openai_model: str = Field(default="gpt-4o-mini", validation_alias="OPENAI_MODEL")
-    openai_timeout: float = Field(default=15.0, validation_alias="OPENAI_TIMEOUT")
-    openai_max_tokens: int = Field(default=300, validation_alias="OPENAI_MAX_TOKENS")
+    gemini_api_key: str = Field(default="", validation_alias="GEMINI_API_KEY")
+    gemini_model: str = Field(default="gemini-2.5-flash", validation_alias="GEMINI_MODEL")
+    gemini_timeout: float = Field(default=15.0, validation_alias="GEMINI_TIMEOUT")
+    gemini_max_tokens: int = Field(default=300, validation_alias="GEMINI_MAX_TOKENS")
 
     email_api_base_url: str = Field(
         default="http://localhost:8001", validation_alias="EMAIL_API_BASE_URL"
+    )
+    email_api_timeout: float = Field(
+        default=30.0, validation_alias="EMAIL_API_TIMEOUT"
+    )
+    email_fetch_limit: int = Field(
+        default=20, validation_alias="EMAIL_FETCH_LIMIT"
     )
     email_account_id: str = Field(default="", validation_alias="EMAIL_ACCOUNT_ID")
     email_category: str = Field(default="inbox", validation_alias="EMAIL_CATEGORY")

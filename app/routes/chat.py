@@ -141,7 +141,7 @@ async def chat(
     emails = trim_to_fit(
         emails,
         budget,
-        settings.openai_model,
+        settings.gemini_model,
         settings.max_body_chars,
         settings.trim_chunk,
     )
@@ -157,7 +157,7 @@ async def chat(
         )
 
     context = emails_to_context(emails, settings.max_body_chars)
-    tokens_used = count_tokens(context, settings.openai_model) + overhead
+    tokens_used = count_tokens(context, settings.gemini_model) + overhead
 
     final_count = len(emails)
 
