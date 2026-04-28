@@ -70,6 +70,16 @@ async def chat(
         ) from e
 
     emails = [dict(e) for e in raw_emails]
+    if not emails:
+        return ChatResponse(
+            response="No emails found in the current batch.",
+            request_id=request_id,
+            email_count=0,
+            filtered_count=0,
+            cache_age_s=cache_age_s,
+            tokens_used=0,
+            stale=stale,
+        )
     emails = deduplicate_by_id(emails)
     sort_by_received_at_desc(emails)
 

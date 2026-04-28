@@ -51,6 +51,19 @@ def test_chat_sender_filter_match(client: TestClient, patch_ask_ai: None) -> Non
     assert r.json()["response"] == "mocked-ai-response"
 
 
+def test_chat_returns_empty_batch_message(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _empty(*_a, **_k):
+        return []
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _empty)
+    r = client.post("/ai/chat", json={"query": "summarize"})
+    assert r.status_code == 200
+    assert r.json()["response"] == "No emails found in the current batch."
+    assert r.json()["email_count"] == 0
+
+
 async def _boom(*_a, **_k):
     raise email_client.EmailAPIError("down")
 

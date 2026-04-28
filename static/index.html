@@ -5,38 +5,188 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>AI Email Assistant</title>
   <style>
-    * { box-sizing: border-box; }
-    body { font-family: system-ui, sans-serif; max-width: 720px; margin: 2rem auto; padding: 0 1rem; background: #0f1419; color: #e6edf3; }
-    h1 { font-size: 1.25rem; }
-    .meta { font-size: 0.85rem; color: #8b949e; margin-bottom: 1rem; }
-    textarea { width: 100%; min-height: 72px; padding: 0.75rem; border-radius: 8px; border: 1px solid #30363d; background: #161b22; color: #e6edf3; }
-    .row { display: flex; gap: 0.5rem; margin-top: 0.5rem; flex-wrap: wrap; }
-    button { padding: 0.5rem 1rem; border-radius: 8px; border: none; cursor: pointer; font-weight: 600; }
-    .primary { background: #238636; color: #fff; }
-    .secondary { background: #21262d; color: #e6edf3; border: 1px solid #30363d; }
-    button:disabled { opacity: 0.5; cursor: not-allowed; }
-    #out { margin-top: 1.5rem; white-space: pre-wrap; background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 1rem; min-height: 120px; }
-    .disclaimer { font-size: 0.8rem; color: #8b949e; margin-top: 1.5rem; line-height: 1.4; }
+    :root {
+      --bg: #0f1117;
+      --panel: #171923;
+      --panel-2: #1e2230;
+      --text: #e8ebf3;
+      --muted: #9aa3b2;
+      --border: #2d3345;
+      --accent: #22c55e;
+      --accent-hover: #16a34a;
+      --user-bubble: #214083;
+      --assistant-bubble: #1c2230;
+    }
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font-family: Inter, Segoe UI, system-ui, sans-serif;
+      background: radial-gradient(circle at top, #151826, var(--bg) 40%);
+      color: var(--text);
+      height: 100vh;
+      overflow: hidden;
+    }
+    .app {
+      max-width: 980px;
+      margin: 0 auto;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      padding: 1rem;
+      gap: 0.75rem;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      background: rgba(23, 25, 35, 0.85);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 0.85rem 1rem;
+      backdrop-filter: blur(8px);
+    }
+    .title {
+      margin: 0;
+      font-size: 1.05rem;
+      font-weight: 700;
+    }
+    .meta {
+      color: var(--muted);
+      font-size: 0.82rem;
+    }
+    .chat {
+      flex: 1;
+      overflow-y: auto;
+      border: 1px solid var(--border);
+      background: rgba(23, 25, 35, 0.8);
+      border-radius: 12px;
+      padding: 1rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.85rem;
+    }
+    .message {
+      max-width: 85%;
+      border-radius: 12px;
+      padding: 0.75rem 0.9rem;
+      white-space: pre-wrap;
+      line-height: 1.45;
+      border: 1px solid var(--border);
+    }
+    .message.user {
+      align-self: flex-end;
+      background: var(--user-bubble);
+      border-color: #3158af;
+    }
+    .message.assistant {
+      align-self: flex-start;
+      background: var(--assistant-bubble);
+    }
+    .composer {
+      border: 1px solid var(--border);
+      background: rgba(23, 25, 35, 0.95);
+      border-radius: 12px;
+      padding: 0.75rem;
+      display: flex;
+      flex-direction: column;
+      gap: 0.6rem;
+    }
+    textarea {
+      width: 100%;
+      min-height: 88px;
+      resize: vertical;
+      border-radius: 10px;
+      border: 1px solid var(--border);
+      background: var(--panel-2);
+      color: var(--text);
+      padding: 0.75rem;
+      font: inherit;
+      outline: none;
+    }
+    textarea:focus {
+      border-color: #4b78de;
+      box-shadow: 0 0 0 2px rgba(75, 120, 222, 0.2);
+    }
+    .actions {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+    .left-actions, .right-actions {
+      display: flex;
+      gap: 0.5rem;
+    }
+    button {
+      border: 1px solid var(--border);
+      background: #252b3b;
+      color: var(--text);
+      border-radius: 10px;
+      padding: 0.5rem 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    button:hover {
+      background: #2d3448;
+    }
+    .primary {
+      background: var(--accent);
+      border-color: var(--accent);
+      color: #07120a;
+    }
+    .primary:hover {
+      background: var(--accent-hover);
+      border-color: var(--accent-hover);
+    }
+    button:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+    .disclaimer {
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin: 0;
+    }
   </style>
 </head>
 <body>
-  <h1>AI Email Assistant</h1>
-  <p class="meta" id="cacheMeta">Last updated: —</p>
-  <label for="q">Your question</label>
-  <textarea id="q" placeholder="e.g. Summarize today's emails"></textarea>
-  <div class="row">
-    <button class="primary" id="send">Send</button>
-    <button class="secondary" id="refresh">Refresh emails</button>
+  <div class="app">
+    <header class="header">
+      <h1 class="title">AI Email Assistant</h1>
+      <div class="meta" id="cacheMeta">Last updated: —</div>
+    </header>
+
+    <main class="chat" id="chat">
+      <div class="message assistant">
+        Ask me anything about your latest emails.
+      </div>
+    </main>
+
+    <section class="composer">
+      <textarea id="q" placeholder="Ask for summary, sender-specific updates, or today's important emails..."></textarea>
+      <div class="actions">
+        <div class="left-actions">
+          <button class="primary" id="send">Send</button>
+          <button id="refresh">Refresh emails</button>
+        </div>
+        <div class="right-actions">
+          <button id="clear">Clear chat</button>
+        </div>
+      </div>
+      <p class="disclaimer">
+        Replies use the email batch loaded from the server, not full mailbox history.
+      </p>
+    </section>
   </div>
-  <div id="out"></div>
-  <p class="disclaimer">
-    Replies use the emails loaded from the server (recent batch, up to the configured limit), not your full mailbox history.
-  </p>
   <script>
-    const out = document.getElementById("out");
+    const chat = document.getElementById("chat");
     const q = document.getElementById("q");
     const send = document.getElementById("send");
     const refresh = document.getElementById("refresh");
+    const clear = document.getElementById("clear");
     const cacheMeta = document.getElementById("cacheMeta");
     let lastCacheAgeBase = null;
     let lastUiTick = null;
@@ -56,15 +206,27 @@
       cacheMeta.textContent = "Last updated: " + secs + " second" + (secs === 1 ? "" : "s") + " ago";
     }, 1000);
 
+    function pushMessage(role, text) {
+      const el = document.createElement("div");
+      el.className = "message " + role;
+      el.textContent = text;
+      chat.appendChild(el);
+      chat.scrollTop = chat.scrollHeight;
+      return el;
+    }
+
     async function doChat(forceRefresh) {
       const query = q.value.trim();
       if (!query) {
-        out.textContent = "Enter a question.";
+        pushMessage("assistant", "Enter a question first.");
         return;
       }
+      pushMessage("user", query);
+      q.value = "";
       send.disabled = true;
       refresh.disabled = true;
-      out.textContent = "Thinking…";
+      clear.disabled = true;
+      const pending = pushMessage("assistant", "Thinking...");
       try {
         const res = await fetch("/ai/chat", {
           method: "POST",
@@ -73,30 +235,40 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          out.textContent = (data.error || data.detail || res.statusText) +
+          pending.textContent = (data.error || data.detail || res.statusText) +
             (data.request_id ? "\n\nrequest_id: " + data.request_id : "");
           return;
         }
-        out.textContent = data.response || "";
+        pending.textContent = data.response || "";
         if (typeof data.cache_age_s === "number") {
           setCacheLine(data.cache_age_s);
         }
         if (data.stale) {
-          out.textContent += "\n\n(note: served from cached emails — email API may be unavailable)";
+          pending.textContent += "\n\n(note: served from cached emails; live email API may be unavailable)";
         }
         if (data.request_id) {
-          out.textContent += "\n\n— request_id: " + data.request_id;
+          pending.textContent += "\n\nrequest_id: " + data.request_id;
         }
       } catch (e) {
-        out.textContent = "Network error: " + e;
+        pending.textContent = "Network error: " + e;
       } finally {
         send.disabled = false;
         refresh.disabled = false;
+        clear.disabled = false;
       }
     }
 
     send.addEventListener("click", () => doChat(false));
     refresh.addEventListener("click", () => doChat(true));
+    clear.addEventListener("click", () => {
+      chat.innerHTML = "";
+      pushMessage("assistant", "Chat cleared. Ask a new question any time.");
+    });
+    q.addEventListener("keydown", (e) => {
+      if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
+        doChat(false);
+      }
+    });
   </script>
 </body>
 </html>

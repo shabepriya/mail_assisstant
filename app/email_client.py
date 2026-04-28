@@ -1,11 +1,13 @@
 import asyncio
 import logging
+from email.utils import parseaddr
+from datetime import UTC
+from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
 
 from app.config import Settings
-from app.datetime_utils import start_of_today_utc_iso
 from app.decrypt import decrypt_if_needed
 from app.errors import EmailAPIError
 
@@ -41,6 +43,72 @@ MOCK_EMAILS: list[dict[str, Any]] = [
 ]
 
 
+def extract_header(headers: Any, name: str) -> str:
+    if not isinstance(headers, list):
+        return ""
+    for header in headers:
+        if not isinstance(header, dict):
+            continue
+        key = str(header.get("name", "")).strip().lower()
+        if key == name.lower():
+            return str(header.get("value", "")).strip()
+    return ""
+
+
+def _extract_received_at_iso(raw_email: dict[str, Any]) -> str:
+    headers = raw_email.get("payload", {}).get("headers", [])
+    date_raw = extract_header(headers, "Date")
+    if not date_raw:
+        return ""
+    try:
+        dt = parsedate_to_datetime(date_raw)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=UTC)
+        return dt.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+    except (TypeError, ValueError):
+        return ""
+
+
+def _normalize_sender(raw_sender: str) -> str:
+    _, email_addr = parseaddr(raw_sender)
+    normalized = (email_addr or raw_sender).lower().strip()
+    return normalized or "unknown"
+
+
+def _extract_body(raw_email: dict[str, Any]) -> str:
+    body = raw_email.get("body") or raw_email.get("snippet") or ""
+    return str(body)
+
+
+def normalize_email(raw_email: dict[str, Any], account_id: str) -> dict[str, Any]:
+    payload = raw_email.get("payload", {})
+    headers = payload.get("headers", [])
+    return {
+        "id": str(raw_email.get("id", "")).strip(),
+        "account_id": str(
+            raw_email.get("account_id")
+            or raw_email.get("accountId")
+            or account_id
+            or "unknown"
+        ),
+        "from": _normalize_sender(extract_header(headers, "From")),
+        "subject": extract_header(headers, "Subject"),
+        "body": _extract_body(raw_email),
+        "received_at": _extract_received_at_iso(raw_email),
+    }
+
+
+def _extract_message_list(data: Any) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        for key in ("messages", "data", "items"):
+            value = data.get(key)
+            if isinstance(value, list):
+                return [item for item in value if isinstance(item, dict)]
+    raise EmailAPIError("Email API must return a JSON array or object with message list")
+
+
 async def fetch_emails(
     client: httpx.AsyncClient,
     settings: Settings,
@@ -50,32 +118,31 @@ async def fetch_emails(
     if settings.mock_emails:
         return decrypt_if_needed([dict(e) for e in MOCK_EMAILS], settings)
 
-    base = settings.email_api_base_url.rstrip("/")
+    if not settings.email_account_id:
+        raise EmailAPIError("EMAIL_ACCOUNT_ID is required when MOCK_EMAILS=false")
+
+    url = settings.email_api_base_url.strip()
     headers: dict[str, str] = {}
     if settings.email_api_key:
         headers["Authorization"] = f"Bearer {settings.email_api_key}"
 
-    if for_today and settings.email_api_supports_since:
-        since = start_of_today_utc_iso(settings.user_timezone)
-        url = f"{base}/emails?since={since}&limit={settings.max_emails}"
-    elif for_today:
-        url = f"{base}/emails?limit={settings.today_fetch_limit}"
-    else:
-        url = f"{base}/emails?limit={settings.max_emails}"
+    params: dict[str, str] = {
+        "accountId": settings.email_account_id,
+        "category": settings.email_category,
+    }
 
     last_err: Exception | None = None
     for attempt in range(3):
         try:
-            resp = await client.get(url, headers=headers)
+            resp = await client.get(url, headers=headers, params=params)
             resp.raise_for_status()
             data = resp.json()
-            if not isinstance(data, list):
-                raise EmailAPIError("Email API must return a JSON array")
-            out: list[dict] = []
-            for item in data:
-                if isinstance(item, dict):
-                    out.append(dict(item))
-            return decrypt_if_needed(out, settings)
+            messages = _extract_message_list(data)
+            normalized = [
+                normalize_email(item, settings.email_account_id)
+                for item in messages
+            ]
+            return decrypt_if_needed(normalized, settings)
         except httpx.HTTPError as e:
             last_err = e
             logger.warning("email_fetch_attempt_failed attempt=%s error=%s", attempt + 1, e)

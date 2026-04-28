@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     email_api_base_url: str = Field(
         default="http://localhost:8001", validation_alias="EMAIL_API_BASE_URL"
     )
+    email_account_id: str = Field(default="", validation_alias="EMAIL_ACCOUNT_ID")
+    email_category: str = Field(default="inbox", validation_alias="EMAIL_CATEGORY")
     email_api_key: str = Field(default="", validation_alias="EMAIL_API_KEY")
     mock_emails: bool = Field(default=True, validation_alias="MOCK_EMAILS")
     email_api_supports_since: bool = Field(
