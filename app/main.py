@@ -17,7 +17,7 @@ from app.routes import health as health_routes
 async def lifespan(app: FastAPI):
     settings = get_settings()
     setup_logging(settings.log_level)
-    app.state.http_client = httpx.AsyncClient(timeout=10.0)
+    app.state.http_client = httpx.AsyncClient(timeout=10.0, trust_env=False)
     app.state.cache = EmailCache(settings.cache_ttl_seconds)
     app.state.start = time.monotonic()
     yield

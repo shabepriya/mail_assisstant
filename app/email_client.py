@@ -121,15 +121,24 @@ async def fetch_emails(
     if not settings.email_account_id:
         raise EmailAPIError("EMAIL_ACCOUNT_ID is required when MOCK_EMAILS=false")
 
-    url = settings.email_api_base_url.strip()
-    headers: dict[str, str] = {}
+    from urllib.parse import urlparse, parse_qs
+
+    raw_url = settings.email_api_base_url.strip()
+    parsed = urlparse(raw_url)
+    existing_params = parse_qs(parsed.query, keep_blank_values=True)
+
+    headers: dict[str, str] = {"ngrok-skip-browser-warning": "true"}
     if settings.email_api_key:
         headers["Authorization"] = f"Bearer {settings.email_api_key}"
 
-    params: dict[str, str] = {
-        "accountId": settings.email_account_id,
-        "category": settings.email_category,
-    }
+    # Only append params that are not already present in the base URL
+    params: dict[str, str] = {}
+    if "accountId" not in existing_params:
+        params["accountId"] = settings.email_account_id
+    if "category" not in existing_params:
+        params["category"] = settings.email_category
+
+    url = raw_url
 
     last_err: Exception | None = None
     for attempt in range(3):
@@ -143,13 +152,31 @@ async def fetch_emails(
                 for item in messages
             ]
             return decrypt_if_needed(normalized, settings)
+        except httpx.HTTPStatusError as e:
+            last_err = e
+            logger.warning(
+                "email_fetch_attempt_failed attempt=%s error=%s %s",
+                attempt + 1,
+                e.response.status_code,
+                e.response.text[:200],
+            )
+            await asyncio.sleep(0.5 * (2**attempt))
         except httpx.HTTPError as e:
             last_err = e
-            logger.warning("email_fetch_attempt_failed attempt=%s error=%s", attempt + 1, e)
+            logger.warning(
+                "email_fetch_attempt_failed attempt=%s error=%s: %s",
+                attempt + 1,
+                type(e).__name__,
+                str(e) or repr(e),
+            )
             await asyncio.sleep(0.5 * (2**attempt))
         except ValueError as e:
             raise EmailAPIError("Invalid JSON from email API") from e
 
     assert last_err is not None
-    logger.warning("email_fetch_http_error error=%s", last_err)
+    logger.warning(
+        "email_fetch_http_error error=%s: %s",
+        type(last_err).__name__,
+        str(last_err) or repr(last_err),
+    )
     raise EmailAPIError(str(last_err)) from last_err
