@@ -271,9 +271,6 @@
         if (data.stale) {
           pending.textContent += "\n\n(note: served from cached emails; live email API may be unavailable)";
         }
-        if (data.request_id) {
-          pending.textContent += "\n\nrequest_id: " + data.request_id;
-        }
       } catch (e) {
         pending.textContent = "Network error: " + e;
       } finally {
