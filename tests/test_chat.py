@@ -84,3 +84,35 @@ def test_chat_503_when_email_api_fails_and_no_cache(
     assert "unavailable" in body["error"].lower()
     assert "request_id" in body
     get_settings.cache_clear()
+
+
+def test_chat_sanitize_layer_deduplicates_and_validates_output(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _dupes(*_a, **_k):
+        return [
+            {
+                "from": "user@example.com",
+                "subject": "Login alert",
+                "body": "Use 123456",
+                "received_at": "2026-04-22T08:30:00Z",
+            },
+            {
+                "from": " USER@example.com ",
+                "subject": " login alert ",
+                "body": "Use 987654",
+                "received_at": "2026-04-22T08:30:01Z",
+            },
+        ]
+
+    async def _fake_ask_ai(settings, *, context: str, query: str, email_count: int) -> str:
+        assert email_count == 1
+        assert context.count("Email #") == 1
+        return "As an AI language model,\nYour login code is 123456."
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _dupes)
+    monkeypatch.setattr("app.routes.chat.ask_ai", _fake_ask_ai)
+
+    r = client.post("/ai/chat", json={"query": "summarize"})
+    assert r.status_code == 200
+    assert r.json()["response"] == "Your login code is [REDACTED_CODE]."

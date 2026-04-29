@@ -1,4 +1,4 @@
-from app.preprocess import emails_to_context, normalize_sender_field
+from app.preprocess import emails_to_context, normalize_sender_field, sanitize_emails
 
 
 def test_normalize_sender_field_lowercases_and_strips() -> None:
@@ -31,3 +31,36 @@ def test_emails_to_context_structured_includes_normalized_from() -> None:
     assert "Subject: Meeting" in ctx
     assert "Date: 2026-04-24T08:30:00Z" in ctx
     assert "Body: Hello" in ctx
+
+
+def test_sanitize_emails_deduplicates_with_normalized_from_subject_fallback() -> None:
+    emails = [
+        {
+            "from": " User@Example.com ",
+            "subject": " Login Alert ",
+            "body": "Code 123456",
+        },
+        {
+            "from": "user@example.com",
+            "subject": "login alert",
+            "body": "Code 999999",
+        },
+    ]
+    cleaned = sanitize_emails(emails)
+    assert len(cleaned) == 1
+    assert cleaned[0]["from"] == " User@Example.com "
+    assert cleaned[0]["body"] == "Code [REDACTED_CODE]"
+
+
+def test_sanitize_emails_priority_keyword_and_body_only_masking() -> None:
+    emails = [
+        {
+            "id": "42",
+            "from": "alerts@example.com",
+            "subject": "Security Alert",
+            "body": "Verification code is 456789.",
+        }
+    ]
+    cleaned = sanitize_emails(emails)
+    assert cleaned[0]["priority"] is True
+    assert cleaned[0]["body"] == "Verification code is [REDACTED_CODE]."

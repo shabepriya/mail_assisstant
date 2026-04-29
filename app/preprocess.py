@@ -1,8 +1,12 @@
+import re
 from datetime import UTC, datetime
 
 from bs4 import BeautifulSoup
 
 from app.datetime_utils import parse_received_at
+
+SENSITIVE_CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
+PRIORITY_KEYWORDS = ("otp", "verification", "login", "security alert", "password")
 
 
 def deduplicate_by_id(emails: list[dict]) -> list[dict]:
@@ -41,6 +45,40 @@ def normalize_sender_field(e: dict) -> str:
     """Lower/strip from or sender for display and matching consistency."""
     raw = e.get("from") or e.get("sender") or "unknown"
     return str(raw).lower().strip() or "unknown"
+
+
+def _normalize_subject(subject: object) -> str:
+    return str(subject or "").lower().strip()
+
+
+def _stable_email_key(e: dict) -> str | tuple[str, str]:
+    email_id = str(e.get("id") or "").strip()
+    if email_id:
+        return email_id
+    sender = normalize_sender_field(e)
+    subject = _normalize_subject(e.get("subject"))
+    return (sender, subject)
+
+
+def sanitize_emails(emails: list[dict]) -> list[dict]:
+    sanitized: list[dict] = []
+    seen: set[str | tuple[str, str]] = set()
+    for email in emails:
+        cloned = dict(email)
+        key = _stable_email_key(cloned)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        body = str(cloned.get("body", ""))
+        redacted_body = SENSITIVE_CODE_PATTERN.sub("[REDACTED_CODE]", body)
+        cloned["body"] = redacted_body
+
+        subject = str(cloned.get("subject", ""))
+        text_blob = f"{subject}\n{redacted_body}".lower()
+        cloned["priority"] = any(keyword in text_blob for keyword in PRIORITY_KEYWORDS)
+        sanitized.append(cloned)
+    return sanitized
 
 
 def emails_to_context(emails: list[dict], max_body_chars: int) -> str:

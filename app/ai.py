@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -10,6 +11,7 @@ from google.genai.errors import APIError
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
+SENSITIVE_CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
 
 
 def build_system_message(settings: Settings, email_count: int) -> str:
@@ -89,6 +91,15 @@ Question: {query}"""
     return count_tokens(sys_t, settings.gemini_model) + count_tokens(
         wrap, settings.gemini_model
     )
+
+
+def validate_ai_output(text: str) -> str:
+    cleaned = str(text or "").strip()
+    cleaned = SENSITIVE_CODE_PATTERN.sub("[REDACTED_CODE]", cleaned)
+    if cleaned.lower().startswith("as an ai"):
+        parts = cleaned.split("\n", 1)
+        cleaned = parts[1].strip() if len(parts) > 1 else ""
+    return cleaned
 
 
 async def ask_ai(

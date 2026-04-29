@@ -3,12 +3,12 @@ import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.ai import ask_ai, estimate_overhead_tokens
+from app.ai import ask_ai, estimate_overhead_tokens, validate_ai_output
 from app.config import Settings, get_settings
 from app.email_client import EmailAPIError, fetch_emails
 from app.filters import extract_sender_query, filter_by_sender, filter_today, is_today_intent
 from app.models import ChatRequest, ChatResponse
-from app.preprocess import deduplicate_by_id, emails_to_context, sort_by_received_at_desc
+from app.preprocess import emails_to_context, sanitize_emails, sort_by_received_at_desc
 from app.tokens import count_tokens, trim_to_fit
 
 logger = logging.getLogger(__name__)
@@ -69,7 +69,8 @@ async def chat(
             },
         ) from e
 
-    emails = [dict(e) for e in raw_emails]
+    # Dedupe is owned by sanitize_emails to keep preprocessing single-responsibility.
+    emails = sanitize_emails([dict(e) for e in raw_emails])
     if not emails:
         return ChatResponse(
             response="No emails found in the current batch.",
@@ -80,7 +81,6 @@ async def chat(
             tokens_used=0,
             stale=stale,
         )
-    emails = deduplicate_by_id(emails)
     sort_by_received_at_desc(emails)
 
     filtered_count = len(emails)
@@ -168,6 +168,7 @@ async def chat(
             query=body.query,
             email_count=final_count,
         )
+        answer = validate_ai_output(answer)
     except Exception:
         logger.exception("openai_failed request_id=%s", request_id)
         raise HTTPException(
