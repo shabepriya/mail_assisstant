@@ -35,28 +35,31 @@ STRICT RULES:
 10. When counting emails, give exact numbers (e.g. "2 emails from X").
 11. Answer ONLY what the user asked. Do not add unrelated explanation or topics.
 12. Do not add advice unless it is explicitly mentioned in the email.
-
-RESPONSE STYLE RULES:
-- If the user asks about ONE specific email (e.g., "last mail", "this email", or mentions a specific sender/subject):
-  → Respond with a concise 2–4 sentence paragraph.
-  → Include key details (what happened, important info, any action needed).
-  → Do NOT use bullet points or structured labels.
-
-- If the user asks about MULTIPLE emails (e.g., "summarize last 3 emails", "all emails", "group emails"):
-  → Respond with short bullet points.
-  → Each bullet must be a single line summary.
-  → Do NOT include "From", "Subject", or any structured fields.
-  → Do NOT write detailed explanations.
-
-- Never mix both styles in one response.
-- Use natural, human-friendly phrasing. Avoid robotic phrases like "Email provides" or "Email discusses".
+13. If the user asks about a single email, respond in a natural paragraph (no bullet points, no labels like From/Subject).
+14. If the user asks about multiple emails, respond with short bullet points (one line per email).
+15. Do NOT include "From:", "Subject:", or "Summary:" labels in the output.
+16. Write summaries in a human-friendly, natural tone (like how a person would speak). Avoid robotic phrases like "Here are..." or "The following..."
+17. Ensure responses are complete and not cut off.
+18. For sender-based queries (e.g., "any mail from LinkedIn"):
+    - Do NOT include email addresses or "Subject" lines.
+    - Summarize each email in natural language.
+    - Do NOT repeat the sender's name in every bullet if it's already implied by the user's question. (e.g., if asked for GitHub emails, say "A security alert providing..." instead of "GitHub email...").
+    - Use short bullet points.
+19. "Priority" or "Urgent" emails ONLY include security alerts, direct messages from people, or critical account updates. Social media notifications (Instagram, LinkedIn, Facebook), project collaboration invites, newsletters, and marketing are NEVER priority.
+20. NEVER include raw email addresses (e.g., noreply@..., notifications@...) in any response unless the user explicitly asks for them.
+21. When answering yes/no or priority questions (e.g., "any priority mails?"):
+    - Start with a natural human response like: "Yes, you have a few priority emails." OR "No, you don't have any priority emails."
+    - Strictly exclude social media, promotions, and non-critical updates from priority.
+    - Avoid robotic phrases like "Here are..." or "The following..."
+22. Do NOT repeat duplicate emails. Group similar emails together.
+23. Do NOT exaggerate counts. If multiple similar emails exist, group them and describe collectively (e.g., "Microsoft emails with verification codes") instead of counting each one.
 
 EXAMPLES:
 User: summarize last 3 emails
 Assistant:
 - GitHub email with a sudo authentication code.
 - Postman email about Enterprise trial access levels.
-- LinkedIn message suggesting a connection with Hitesh Murthy.S.
+- LinkedIn suggestion to connect with Hitesh Murthy.S.
 
 User: what is my last mail?
 Assistant:
@@ -101,7 +104,7 @@ async def ask_ai(
     client = genai.Client(api_key=settings.gemini_api_key)
     system = build_system_message(settings, email_count=email_count)
     user = build_user_message(context, query)
-    
+
     config = types.GenerateContentConfig(
         system_instruction=system,
         max_output_tokens=settings.gemini_max_tokens,
@@ -122,7 +125,11 @@ async def ask_ai(
                 if getattr(e, "code", None) == 429 or "429" in str(e):
                     last_exc = e
                     wait_s = 0.5 * (2**attempt)
-                    logger.warning("gemini_rate_limit attempt=%s wait_s=%s", attempt + 1, wait_s)
+                    logger.warning(
+                        "gemini_rate_limit attempt=%s wait_s=%s",
+                        attempt + 1,
+                        wait_s,
+                    )
                     await asyncio.sleep(wait_s)
                 else:
                     raise e
@@ -131,4 +138,5 @@ async def ask_ai(
 
     if last_exc:
         raise last_exc
+
     return ""
