@@ -20,12 +20,20 @@ def build_system_message(
     *,
     priority_count: int | None = None,
     non_priority_count: int | None = None,
+    include_calendar_confirmation_guidance: bool = False,
 ) -> str:
     tz = settings.user_timezone
     try:
         today_local = datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d")
     except Exception:
         today_local = datetime.now().strftime("%Y-%m-%d")
+
+    calendar_rule = ""
+    if include_calendar_confirmation_guidance:
+        calendar_rule = (
+            "\n25. If a meeting suggestion is present, mention the proposed time and ask for explicit confirmation.\n"
+            "26. Never claim a calendar event was added unless the system explicitly confirms successful scheduling.\n"
+        )
 
     return f"""You are a business email assistant. You help staff analyze incoming emails.
 
@@ -62,6 +70,7 @@ STRICT RULES:
 22. Do NOT repeat duplicate emails. Group similar emails together.
 23. Do NOT exaggerate counts. If multiple similar emails exist, group them and describe collectively (e.g., "Microsoft emails with verification codes") instead of counting each one.
 24. If multiple emails have the same sender and a very similar subject, collapse them into one summary unless the user explicitly asked for itemized email-by-email output.
+{calendar_rule}
 
 EXAMPLES:
 User: summarize last 3 emails
@@ -94,6 +103,7 @@ def estimate_overhead_tokens(
     *,
     priority_count: int | None = None,
     non_priority_count: int | None = None,
+    include_calendar_confirmation_guidance: bool = False,
 ) -> int:
     from app.tokens import count_tokens
 
@@ -102,6 +112,7 @@ def estimate_overhead_tokens(
         email_count=0,
         priority_count=priority_count,
         non_priority_count=non_priority_count,
+        include_calendar_confirmation_guidance=include_calendar_confirmation_guidance,
     )
     wrap = f"""Emails:
 
@@ -129,6 +140,7 @@ async def ask_ai(
     email_count: int,
     priority_count: int | None = None,
     non_priority_count: int | None = None,
+    include_calendar_confirmation_guidance: bool = False,
 ) -> str:
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is not set")
@@ -139,6 +151,7 @@ async def ask_ai(
         email_count=email_count,
         priority_count=priority_count,
         non_priority_count=non_priority_count,
+        include_calendar_confirmation_guidance=include_calendar_confirmation_guidance,
     )
     user = build_user_message(context, query)
 

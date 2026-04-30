@@ -6,8 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.ai import ask_ai, estimate_overhead_tokens, validate_ai_output
 from app.config import Settings, get_settings
 from app.email_client import EmailAPIError, fetch_emails
-from app.filters import extract_sender_query, filter_by_sender, filter_today, is_today_intent
-from app.models import ChatRequest, ChatResponse
+from app.filters import (
+    extract_sender_query,
+    filter_by_sender,
+    filter_today,
+    is_today_intent,
+    wants_meeting_calendar_help,
+)
+from app.google_calendar import GoogleCalendarClient
+from app.meeting_parser import extract_meeting_proposals_from_emails
+from app.models import CalendarProposalPayload, ChatRequest, ChatResponse
+from app.pending_calendar import PendingProposal
 from app.preprocess import emails_to_context, sanitize_emails, sort_by_received_at_desc
 from app.tokens import count_tokens, trim_to_fit
 
@@ -28,6 +37,19 @@ def _settings_dep() -> Settings:
     return get_settings()
 
 
+def _resolve_session_id(request: Request, body: ChatRequest) -> str:
+    if body.client_session_id and body.client_session_id.strip():
+        return body.client_session_id.strip()
+    if request.client and request.client.host:
+        return request.client.host
+    return "anonymous"
+
+
+def _is_affirmative_only(query: str) -> bool:
+    normalized = query.lower().strip().strip(".!?")
+    return normalized in {"yes", "y", "ok", "okay", "approve", "schedule it", "add it"}
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: Request,
@@ -37,6 +59,90 @@ async def chat(
     request_id = str(uuid.uuid4())
     client = request.app.state.http_client
     cache = request.app.state.cache
+    pending_store = request.app.state.pending_calendar
+    session_id = _resolve_session_id(request, body)
+    calendar_client = GoogleCalendarClient(client, settings)
+
+    if body.calendar_action in {"approve", "dismiss"}:
+        if not body.calendar_proposal_id:
+            return ChatResponse(
+                response="Please choose a proposal before confirming this action.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        proposal = await pending_store.get(session_id, body.calendar_proposal_id)
+        if not proposal:
+            return ChatResponse(
+                response="That calendar proposal is no longer available. Please ask again.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        if body.calendar_action == "dismiss":
+            await pending_store.delete(session_id, proposal.proposal_id)
+            return ChatResponse(
+                response="Okay, I will ignore that calendar suggestion.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+
+        result = await calendar_client.create_event(
+            proposal_id=proposal.proposal_id,
+            title=proposal.title,
+            start_iso=proposal.start_iso,
+            end_iso=proposal.end_iso,
+            timezone=proposal.timezone,
+        )
+        await pending_store.delete(session_id, proposal.proposal_id)
+        if result.duplicate:
+            message = "This meeting looks already scheduled, so I skipped creating a duplicate event."
+        elif result.created:
+            message = f"Done. I added '{proposal.title}' to your calendar."
+        else:
+            message = "I couldn't schedule this event right now. Please try again in a moment."
+        return ChatResponse(
+            response=message,
+            request_id=request_id,
+            email_count=0,
+            filtered_count=0,
+            cache_age_s=0.0,
+            tokens_used=0,
+        )
+
+    if body.calendar_action is None and _is_affirmative_only(body.query):
+        pending = await pending_store.list_for_session(session_id)
+        if len(pending) == 1 and pending[0].requested_confirmation:
+            proposal = pending[0]
+            result = await calendar_client.create_event(
+                proposal_id=proposal.proposal_id,
+                title=proposal.title,
+                start_iso=proposal.start_iso,
+                end_iso=proposal.end_iso,
+                timezone=proposal.timezone,
+            )
+            await pending_store.delete(session_id, proposal.proposal_id)
+            if result.duplicate:
+                message = "This meeting was already on your calendar, so I skipped creating a duplicate."
+            elif result.created:
+                message = f"Done. I added '{proposal.title}' to your calendar."
+            else:
+                message = "I couldn't schedule this event right now. Please try again in a moment."
+            return ChatResponse(
+                response=message,
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
 
     for_today = is_today_intent(body.query)
     strategy = _fetch_strategy(settings, for_today)
@@ -159,12 +265,76 @@ async def chat(
     priority_count = sum(1 for e in emails if bool(e.get("priority")))
     non_priority_count = len(emails) - priority_count
 
+    if wants_meeting_calendar_help(body.query):
+        candidates = extract_meeting_proposals_from_emails(emails, settings)
+        if candidates:
+            payloads: list[CalendarProposalPayload] = []
+            for c in candidates:
+                payload = CalendarProposalPayload(
+                    proposal_id=c.proposal_id,
+                    title=c.title,
+                    start_iso=c.start_local.isoformat(),
+                    end_iso=c.end_local.isoformat(),
+                    start_local_display=c.start_local.strftime("%Y-%m-%d %I:%M %p"),
+                    timezone=c.timezone,
+                    confidence=c.confidence,
+                )
+                payloads.append(payload)
+                await pending_store.put(
+                    PendingProposal(
+                        proposal_id=c.proposal_id,
+                        session_id=session_id,
+                        title=c.title,
+                        start_iso=payload.start_iso,
+                        end_iso=payload.end_iso,
+                        timezone=c.timezone,
+                        confidence=c.confidence,
+                        summary_for_user=c.summary_for_user,
+                    )
+                )
+                await pending_store.mark_confirmation_requested(session_id, c.proposal_id)
+
+            if len(payloads) == 1:
+                confidence_hint = (
+                    " (low confidence, please verify)"
+                    if payloads[0].confidence < 0.8
+                    else ""
+                )
+                response_text = (
+                    f"I found a meeting suggestion: {payloads[0].title} at "
+                    f"{payloads[0].start_local_display}.{confidence_hint} "
+                    "Would you like me to add it to your calendar?"
+                )
+            else:
+                options = [
+                    f"- {p.start_local_display}: {p.title} (proposal_id: {p.proposal_id})"
+                    for p in payloads
+                ]
+                response_text = (
+                    f"I found {len(payloads)} possible meetings. Choose one to add:\n"
+                    + "\n".join(options)
+                )
+
+            return ChatResponse(
+                response=response_text,
+                request_id=request_id,
+                email_count=len(emails),
+                filtered_count=filtered_count,
+                cache_age_s=cache_age_s,
+                tokens_used=0,
+                priority_email_count=priority_count,
+                other_email_count=non_priority_count,
+                calendar_proposals=payloads,
+                stale=stale,
+            )
+
     context = emails_to_context(emails, settings.max_body_chars)
     overhead = estimate_overhead_tokens(
         settings,
         body.query,
         priority_count=priority_count,
         non_priority_count=non_priority_count,
+        include_calendar_confirmation_guidance=False,
     )
     tokens_used = count_tokens(context, settings.gemini_model) + overhead
 
@@ -178,6 +348,7 @@ async def chat(
             email_count=final_count,
             priority_count=priority_count,
             non_priority_count=non_priority_count,
+            include_calendar_confirmation_guidance=False,
         )
         answer = validate_ai_output(answer)
     except Exception:

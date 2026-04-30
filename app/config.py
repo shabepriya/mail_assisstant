@@ -58,6 +58,22 @@ class Settings(BaseSettings):
     trim_chunk: int = Field(default=3, ge=1, le=10, validation_alias="TRIM_CHUNK")
 
     user_timezone: str = Field(default="Asia/Kolkata", validation_alias="USER_TIMEZONE")
+    calendar_pending_ttl_seconds: float = Field(
+        default=900.0, ge=60, validation_alias="CALENDAR_PENDING_TTL_SECONDS"
+    )
+    calendar_scheduling_enabled: bool = Field(
+        default=False, validation_alias="CALENDAR_SCHEDULING_ENABLED"
+    )
+    calendar_default_duration_minutes: int = Field(
+        default=30, ge=5, le=480, validation_alias="CALENDAR_DEFAULT_DURATION_MINUTES"
+    )
+    google_calendar_id: str = Field(default="primary", validation_alias="GOOGLE_CALENDAR_ID")
+    #: Legacy: static OAuth access token only (expires ~1h; no auto-refresh). Prefer token file.
+    google_calendar_token: str = Field(default="", validation_alias="GOOGLE_CALENDAR_TOKEN")
+    #: OAuth user token file from InstalledAppFlow (contains refresh_token); auto-refreshes.
+    google_calendar_token_path: str = Field(
+        default="", validation_alias="GOOGLE_CALENDAR_TOKEN_PATH"
+    )
 
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     cors_origins: str = Field(

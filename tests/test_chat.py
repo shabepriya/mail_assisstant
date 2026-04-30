@@ -16,6 +16,7 @@ def patch_ask_ai(monkeypatch: pytest.MonkeyPatch) -> None:
         email_count: int,
         priority_count: int | None = None,
         non_priority_count: int | None = None,
+        include_calendar_confirmation_guidance: bool = False,
     ) -> str:
         assert email_count >= 0
         assert priority_count is None or priority_count >= 0
@@ -125,6 +126,7 @@ def test_chat_sanitize_layer_deduplicates_and_validates_output(
         email_count: int,
         priority_count: int | None = None,
         non_priority_count: int | None = None,
+        include_calendar_confirmation_guidance: bool = False,
     ) -> str:
         assert email_count == 1
         assert priority_count == 1
@@ -140,3 +142,109 @@ def test_chat_sanitize_layer_deduplicates_and_validates_output(
     assert r.json()["response"] == "Your login code is [REDACTED_CODE]."
     assert r.json()["priority_email_count"] == 1
     assert r.json()["other_email_count"] == 0
+
+
+def test_chat_returns_calendar_proposals_for_meeting_query(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _meetings(*_a, **_k):
+        return [
+            {
+                "id": "m1",
+                "from": "team@example.com",
+                "subject": "Project meeting tomorrow",
+                "body": "Meeting tomorrow 9 PM IST",
+                "received_at": "2026-04-22T08:30:00Z",
+            }
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _meetings)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "any meeting tomorrow?", "client_session_id": "sess-a"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["calendar_proposals"] is not None
+    assert len(data["calendar_proposals"]) == 1
+    assert data["calendar_proposals"][0]["proposal_id"]
+
+
+def test_chat_calendar_dismiss_flow(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _meetings(*_a, **_k):
+        return [
+            {
+                "id": "m1",
+                "from": "team@example.com",
+                "subject": "Project meeting tomorrow",
+                "body": "Meeting tomorrow 9 PM IST",
+                "received_at": "2026-04-22T08:30:00Z",
+            }
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _meetings)
+    first = client.post(
+        "/ai/chat",
+        json={"query": "any meeting tomorrow?", "client_session_id": "sess-b"},
+    ).json()
+    pid = first["calendar_proposals"][0]["proposal_id"]
+
+    r = client.post(
+        "/ai/chat",
+        json={
+            "query": "ignore",
+            "client_session_id": "sess-b",
+            "calendar_action": "dismiss",
+            "calendar_proposal_id": pid,
+        },
+    )
+    assert r.status_code == 200
+    assert "ignore" in r.json()["response"].lower()
+
+
+def test_chat_calendar_approve_flow(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _meetings(*_a, **_k):
+        return [
+            {
+                "id": "m1",
+                "from": "team@example.com",
+                "subject": "Project meeting tomorrow",
+                "body": "Meeting tomorrow 9 PM IST",
+                "received_at": "2026-04-22T08:30:00Z",
+            }
+        ]
+
+    class _Result:
+        created = True
+        duplicate = False
+
+    async def _fake_create_event(self, **_kwargs):
+        return _Result()
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _meetings)
+    monkeypatch.setattr(
+        "app.google_calendar.GoogleCalendarClient.create_event",
+        _fake_create_event,
+    )
+    first = client.post(
+        "/ai/chat",
+        json={"query": "any meeting tomorrow?", "client_session_id": "sess-c"},
+    ).json()
+    pid = first["calendar_proposals"][0]["proposal_id"]
+
+    r = client.post(
+        "/ai/chat",
+        json={
+            "query": "approve",
+            "client_session_id": "sess-c",
+            "calendar_action": "approve",
+            "calendar_proposal_id": pid,
+        },
+    )
+    assert r.status_code == 200
+    assert "added" in r.json()["response"].lower()

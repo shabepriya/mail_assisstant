@@ -23,6 +23,22 @@ def is_today_intent(query: str) -> bool:
     return any(k in q for k in keywords)
 
 
+def wants_meeting_calendar_help(query: str) -> bool:
+    q = query.lower()
+    hints = (
+        "meeting",
+        "calendar",
+        "schedule",
+        "add to calendar",
+        "book this",
+        "tomorrow",
+        "today",
+        "appointment",
+        "call at",
+    )
+    return any(h in q for h in hints)
+
+
 def extract_sender_query(query: str) -> str | None:
     """Return the token after 'from ' if present (e.g. sundar, sundar@gmail.com)."""
     match = re.search(r"from\s+(\S+)", query.lower())

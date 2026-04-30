@@ -213,6 +213,12 @@
     const refresh = document.getElementById("refresh");
     const clear = document.getElementById("clear");
     const cacheMeta = document.getElementById("cacheMeta");
+    const SESSION_KEY = "mail_assistant_client_session_id";
+    let clientSessionId = localStorage.getItem(SESSION_KEY);
+    if (!clientSessionId) {
+      clientSessionId = "sess_" + Math.random().toString(36).slice(2, 14);
+      localStorage.setItem(SESSION_KEY, clientSessionId);
+    }
     let lastCacheAgeBase = null;
     let lastUiTick = null;
 
@@ -240,6 +246,89 @@
       return el;
     }
 
+    async function sendCalendarAction(action, proposalId) {
+      send.disabled = true;
+      refresh.disabled = true;
+      clear.disabled = true;
+      const pending = pushMessage("assistant", "Scheduling...");
+      try {
+        const res = await fetch("/ai/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: action === "approve" ? "approve" : "dismiss",
+            force_refresh: false,
+            client_session_id: clientSessionId,
+            calendar_action: action,
+            calendar_proposal_id: proposalId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+          pending.textContent = (data.error || data.detail || res.statusText) +
+            (data.request_id ? "\n\nrequest_id: " + data.request_id : "");
+          return;
+        }
+        pending.textContent = data.response || "";
+      } catch (e) {
+        pending.textContent = "Network error: " + e;
+      } finally {
+        send.disabled = false;
+        refresh.disabled = false;
+        clear.disabled = false;
+      }
+    }
+
+    function renderCalendarProposalButtons(targetEl, proposals) {
+      if (!Array.isArray(proposals) || proposals.length === 0) return;
+      const wrap = document.createElement("div");
+      wrap.style.marginTop = "10px";
+      wrap.style.display = "flex";
+      wrap.style.flexDirection = "column";
+      wrap.style.gap = "8px";
+
+      const title = document.createElement("div");
+      title.style.fontSize = "12px";
+      title.style.color = "var(--muted)";
+      title.textContent = "Calendar proposals";
+      wrap.appendChild(title);
+
+      proposals.forEach((p) => {
+        const row = document.createElement("div");
+        row.style.border = "1px solid var(--border)";
+        row.style.borderRadius = "10px";
+        row.style.padding = "8px";
+        row.style.background = "var(--panel-2)";
+
+        const text = document.createElement("div");
+        text.style.fontSize = "13px";
+        text.style.marginBottom = "8px";
+        const conf = Math.round((p.confidence || 0) * 100);
+        text.textContent = `${p.title} • ${p.start_local_display} (${p.timezone}) • confidence ${conf}%`;
+        row.appendChild(text);
+
+        const btns = document.createElement("div");
+        btns.style.display = "flex";
+        btns.style.gap = "8px";
+
+        const approve = document.createElement("button");
+        approve.textContent = "Add to Calendar";
+        approve.className = "primary";
+        approve.onclick = () => sendCalendarAction("approve", p.proposal_id);
+
+        const dismiss = document.createElement("button");
+        dismiss.textContent = "Ignore";
+        dismiss.onclick = () => sendCalendarAction("dismiss", p.proposal_id);
+
+        btns.appendChild(approve);
+        btns.appendChild(dismiss);
+        row.appendChild(btns);
+        wrap.appendChild(row);
+      });
+
+      targetEl.appendChild(wrap);
+    }
+
     async function doChat(forceRefresh) {
       const query = q.value.trim();
       if (!query) {
@@ -256,7 +345,11 @@
         const res = await fetch("/ai/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ query, force_refresh: !!forceRefresh }),
+          body: JSON.stringify({
+            query,
+            force_refresh: !!forceRefresh,
+            client_session_id: clientSessionId,
+          }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
@@ -265,6 +358,7 @@
           return;
         }
         pending.textContent = data.response || "";
+        renderCalendarProposalButtons(pending, data.calendar_proposals);
         if (typeof data.cache_age_s === "number") {
           setCacheLine(data.cache_age_s);
         }

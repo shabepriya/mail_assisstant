@@ -1,4 +1,9 @@
-from app.filters import extract_sender_query, filter_by_sender, is_today_intent
+from app.filters import (
+    extract_sender_query,
+    filter_by_sender,
+    is_today_intent,
+    wants_meeting_calendar_help,
+)
 
 
 def test_extract_sender_query_variants() -> None:
@@ -36,3 +41,9 @@ def test_is_today_intent_includes_latest_recent_new() -> None:
     assert is_today_intent("any recent emails?") is True
     assert is_today_intent("new updates in inbox") is True
     assert is_today_intent("summarize all complaints") is False
+
+
+def test_wants_meeting_calendar_help() -> None:
+    assert wants_meeting_calendar_help("any meeting tomorrow?") is True
+    assert wants_meeting_calendar_help("schedule call") is True
+    assert wants_meeting_calendar_help("summarize inbox") is False
