@@ -1,5 +1,8 @@
 import logging
+import os
 import uuid
+from datetime import timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
@@ -14,10 +17,20 @@ from app.filters import (
     wants_meeting_calendar_help,
 )
 from app.google_calendar import GoogleCalendarClient
-from app.meeting_parser import extract_meeting_proposals_from_emails
+from app.meeting_parser import (
+    DATE_HINT_PATTERN,
+    TIME_PATTERN,
+    extract_meeting_proposals_from_emails,
+)
 from app.models import CalendarProposalPayload, ChatRequest, ChatResponse
 from app.pending_calendar import PendingProposal
-from app.preprocess import emails_to_context, sanitize_emails, sort_by_received_at_desc
+from app.preprocess import (
+    clean_body,
+    emails_to_context,
+    sanitize_emails,
+    sort_by_received_at_desc,
+    truncate_body_raw,
+)
 from app.tokens import count_tokens, trim_to_fit
 
 logger = logging.getLogger(__name__)
@@ -48,6 +61,56 @@ def _resolve_session_id(request: Request, body: ChatRequest) -> str:
 def _is_affirmative_only(query: str) -> bool:
     normalized = query.lower().strip().strip(".!?")
     return normalized in {"yes", "y", "ok", "okay", "approve", "schedule it", "add it"}
+
+
+def _to_payload(candidate, timezone: str) -> CalendarProposalPayload:
+    return CalendarProposalPayload(
+        proposal_id=candidate.proposal_id,
+        title=candidate.title,
+        start_iso=candidate.start_local.isoformat(),
+        end_iso=candidate.end_local.isoformat(),
+        start_local_display=candidate.start_local.strftime("%Y-%m-%d %I:%M %p"),
+        timezone=timezone,
+        confidence=candidate.confidence,
+    )
+
+
+def _build_fallback_from_ai(
+    answer: str, emails: list[dict], settings: Settings
+) -> CalendarProposalPayload | None:
+    lowered = answer.lower()
+    if "meeting" not in lowered:
+        return None
+    if TIME_PATTERN.search(answer) is None:
+        return None
+    if DATE_HINT_PATTERN.search(answer) is None:
+        return None
+    fallback_email = {"subject": "Meeting reminder", "body": answer}
+    parsed = extract_meeting_proposals_from_emails([fallback_email], settings)
+    if not parsed:
+        return None
+    candidate = parsed[0]
+    user_tz = ZoneInfo(settings.user_timezone)
+    candidate.start_local = candidate.start_local.astimezone(user_tz)
+    candidate.end_local = candidate.start_local + timedelta(
+        minutes=settings.calendar_default_duration_minutes
+    )
+    candidate.confidence = 0.35
+    candidate.summary_for_user = (
+        f"Fallback meeting from assistant answer: "
+        f"{candidate.start_local.strftime('%Y-%m-%d %I:%M %p')} ({settings.user_timezone})"
+    )
+    for email in emails:
+        subject = str(email.get("subject") or "").strip()
+        body = clean_body(
+            truncate_body_raw(str(email.get("body") or ""), settings.max_body_chars),
+            settings.max_body_chars,
+        )
+        text = f"{subject}\n{body}".lower()
+        if any(token in text for token in ("meeting", "google meet", "zoom", "teams", "call")):
+            candidate.title = subject[:120] if subject else "Meeting"
+            break
+    return _to_payload(candidate, settings.user_timezone)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -267,18 +330,24 @@ async def chat(
 
     if wants_meeting_calendar_help(body.query):
         candidates = extract_meeting_proposals_from_emails(emails, settings)
+        if not candidates and os.getenv("DEBUG_MEETING_PARSE", "").strip() in {"1", "true", "yes"}:
+            for email in emails:
+                subject = str(email.get("subject") or "")
+                body = clean_body(
+                    truncate_body_raw(str(email.get("body") or ""), settings.max_body_chars),
+                    settings.max_body_chars,
+                )
+                logger.debug(
+                    "meeting_parse_clean_text request_id=%s session_id=%s subject=%r clean_text=%r",
+                    request_id,
+                    session_id,
+                    subject,
+                    f"{subject}\n{body}"[:2000],
+                )
         if candidates:
             payloads: list[CalendarProposalPayload] = []
             for c in candidates:
-                payload = CalendarProposalPayload(
-                    proposal_id=c.proposal_id,
-                    title=c.title,
-                    start_iso=c.start_local.isoformat(),
-                    end_iso=c.end_local.isoformat(),
-                    start_local_display=c.start_local.strftime("%Y-%m-%d %I:%M %p"),
-                    timezone=c.timezone,
-                    confidence=c.confidence,
-                )
+                payload = _to_payload(c, c.timezone)
                 payloads.append(payload)
                 await pending_store.put(
                     PendingProposal(
@@ -361,6 +430,37 @@ async def chat(
             },
         ) from None
 
+    calendar_payloads: list[CalendarProposalPayload] | None = None
+    if (
+        wants_meeting_calendar_help(body.query)
+        and settings.calendar_scheduling_enabled
+    ):
+        fallback = _build_fallback_from_ai(answer, emails, settings)
+        if fallback is not None:
+            calendar_payloads = [fallback]
+            await pending_store.put(
+                PendingProposal(
+                    proposal_id=fallback.proposal_id,
+                    session_id=session_id,
+                    title=fallback.title,
+                    start_iso=fallback.start_iso,
+                    end_iso=fallback.end_iso,
+                    timezone=fallback.timezone,
+                    confidence=fallback.confidence,
+                    summary_for_user=(
+                        "Fallback proposal derived from assistant summary; "
+                        "please verify date and time before approving."
+                    ),
+                )
+            )
+            await pending_store.mark_confirmation_requested(
+                session_id, fallback.proposal_id
+            )
+            answer = (
+                f"{answer}\n\nI detected a possible meeting time. "
+                "Please verify the date/time and choose Add to Calendar or Ignore."
+            )
+
     return ChatResponse(
         response=answer,
         request_id=request_id,
@@ -370,5 +470,6 @@ async def chat(
         tokens_used=tokens_used,
         priority_email_count=priority_count,
         other_email_count=non_priority_count,
+        calendar_proposals=calendar_payloads,
         stale=stale,
     )

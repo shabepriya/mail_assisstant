@@ -5,10 +5,15 @@ from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from app.config import Settings
+from app.preprocess import clean_body, truncate_body_raw
 
-TIME_PATTERN = re.compile(r"\b(1[0-2]|0?[1-9])(?::([0-5]\d))?\s*(am|pm)\b", re.I)
+TIME_PATTERN = re.compile(
+    r"\b((?:1[0-2]|0?[1-9])(?:[:.][0-5]\d)?\s*(?:am|pm)|(?:[01]?\d|2[0-3])[:.][0-5]\d)\b",
+    re.I,
+)
 DATE_HINT_PATTERN = re.compile(r"\b(today|tomorrow)\b", re.I)
 TZ_TOKEN_PATTERN = re.compile(r"\b(IST|UTC|PST|PDT|EST|EDT|CST|CDT|MST|MDT)\b")
+MEETING_KEYWORDS = ("meeting", "google meet", "zoom", "teams", "call")
 
 TZ_MAP = {
     "IST": "Asia/Kolkata",
@@ -50,14 +55,29 @@ def _parse_time(text: str) -> tuple[int, int] | None:
     match = TIME_PATTERN.search(text)
     if not match:
         return None
-    hour = int(match.group(1))
-    minute = int(match.group(2) or 0)
-    ampm = match.group(3).lower()
-    if ampm == "pm" and hour != 12:
-        hour += 12
-    if ampm == "am" and hour == 12:
-        hour = 0
-    return hour, minute
+    raw = match.group(1).lower().replace(" ", "")
+    if raw.endswith(("am", "pm")):
+        ampm = raw[-2:]
+        clock = raw[:-2]
+        if ":" in clock:
+            hour_s, minute_s = clock.split(":", 1)
+        elif "." in clock:
+            hour_s, minute_s = clock.split(".", 1)
+        else:
+            hour_s, minute_s = clock, "0"
+        hour = int(hour_s)
+        minute = int(minute_s)
+        if ampm == "pm" and hour != 12:
+            hour += 12
+        if ampm == "am" and hour == 12:
+            hour = 0
+        return hour, minute
+
+    if ":" in raw:
+        hour_s, minute_s = raw.split(":", 1)
+    else:
+        hour_s, minute_s = raw.split(".", 1)
+    return int(hour_s), int(minute_s)
 
 
 def _parse_date_base(text: str, tz: ZoneInfo) -> datetime | None:
@@ -88,13 +108,23 @@ def extract_meeting_proposals_from_emails(
     user_tz = ZoneInfo(settings.user_timezone)
 
     for email in emails:
-        text = f"{email.get('subject', '')}\n{email.get('body', '')}"
-        if "meeting" not in text.lower() and "call" not in text.lower():
+        subject = str(email.get("subject") or "")
+        body_raw = str(email.get("body") or "")
+        clean_text = (
+            subject
+            + "\n"
+            + clean_body(
+                truncate_body_raw(body_raw, settings.max_body_chars),
+                settings.max_body_chars,
+            )
+        )
+        text_lower = clean_text.lower()
+        if not any(keyword in text_lower for keyword in MEETING_KEYWORDS):
             continue
 
-        source_tz = _source_timezone(text, settings.user_timezone)
-        date_base = _parse_date_base(text, source_tz)
-        time_hit = _parse_time(text)
+        source_tz = _source_timezone(clean_text, settings.user_timezone)
+        date_base = _parse_date_base(clean_text, source_tz)
+        time_hit = _parse_time(clean_text)
         if not date_base or not time_hit:
             continue
 
@@ -104,9 +134,9 @@ def extract_meeting_proposals_from_emails(
         end_local = start_local + timedelta(minutes=settings.calendar_default_duration_minutes)
 
         confidence = 0.92
-        if TZ_TOKEN_PATTERN.search(text):
+        if TZ_TOKEN_PATTERN.search(clean_text):
             confidence += 0.03
-        if "?" in text:
+        if "?" in clean_text:
             confidence -= 0.1
         confidence = max(0.0, min(1.0, confidence))
 

@@ -248,3 +248,46 @@ def test_chat_calendar_approve_flow(
     )
     assert r.status_code == 200
     assert "added" in r.json()["response"].lower()
+
+
+def test_chat_ai_fallback_calendar_proposal_requires_time_and_date(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "m2",
+                "from": "noreply@example.com",
+                "subject": "Status update",
+                "body": "Please review the report.",
+                "received_at": "2026-04-22T08:30:00Z",
+            }
+        ]
+
+    async def _fallback_ai(
+        settings,
+        *,
+        context: str,
+        query: str,
+        email_count: int,
+        priority_count: int | None = None,
+        non_priority_count: int | None = None,
+        include_calendar_confirmation_guidance: bool = False,
+    ) -> str:
+        return "You have a meeting tomorrow at 9 PM."
+
+    monkeypatch.setenv("CALENDAR_SCHEDULING_ENABLED", "true")
+    get_settings.cache_clear()
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.routes.chat.ask_ai", _fallback_ai)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "Any meeting tomorrow?", "client_session_id": "sess-fallback"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["calendar_proposals"] is not None
+    assert len(data["calendar_proposals"]) == 1
+    assert data["calendar_proposals"][0]["confidence"] <= 0.35
+    get_settings.cache_clear()
