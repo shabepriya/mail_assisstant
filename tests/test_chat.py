@@ -8,8 +8,18 @@ from app.config import get_settings
 
 @pytest.fixture
 def patch_ask_ai(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def fake_ask_ai(settings, *, context: str, query: str, email_count: int) -> str:
+    async def fake_ask_ai(
+        settings,
+        *,
+        context: str,
+        query: str,
+        email_count: int,
+        priority_count: int | None = None,
+        non_priority_count: int | None = None,
+    ) -> str:
         assert email_count >= 0
+        assert priority_count is None or priority_count >= 0
+        assert non_priority_count is None or non_priority_count >= 0
         if "missingxyz" in query:
             return "Not available in current emails."
         return "mocked-ai-response"
@@ -25,6 +35,8 @@ def test_chat_ok(client: TestClient, patch_ask_ai: None) -> None:
     assert "request_id" in data
     assert "cache_age_s" in data
     assert "email_count" in data
+    assert "priority_email_count" in data
+    assert "other_email_count" in data
 
 
 def test_chat_not_available_sentence(client: TestClient, patch_ask_ai: None) -> None:
@@ -105,8 +117,18 @@ def test_chat_sanitize_layer_deduplicates_and_validates_output(
             },
         ]
 
-    async def _fake_ask_ai(settings, *, context: str, query: str, email_count: int) -> str:
+    async def _fake_ask_ai(
+        settings,
+        *,
+        context: str,
+        query: str,
+        email_count: int,
+        priority_count: int | None = None,
+        non_priority_count: int | None = None,
+    ) -> str:
         assert email_count == 1
+        assert priority_count == 1
+        assert non_priority_count == 0
         assert context.count("Email #") == 1
         return "As an AI language model,\nYour login code is 123456."
 
@@ -116,3 +138,5 @@ def test_chat_sanitize_layer_deduplicates_and_validates_output(
     r = client.post("/ai/chat", json={"query": "summarize"})
     assert r.status_code == 200
     assert r.json()["response"] == "Your login code is [REDACTED_CODE]."
+    assert r.json()["priority_email_count"] == 1
+    assert r.json()["other_email_count"] == 0

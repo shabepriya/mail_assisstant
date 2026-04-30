@@ -14,7 +14,13 @@ logger = logging.getLogger(__name__)
 SENSITIVE_CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
 
 
-def build_system_message(settings: Settings, email_count: int) -> str:
+def build_system_message(
+    settings: Settings,
+    email_count: int,
+    *,
+    priority_count: int | None = None,
+    non_priority_count: int | None = None,
+) -> str:
     tz = settings.user_timezone
     try:
         today_local = datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d")
@@ -55,6 +61,7 @@ STRICT RULES:
     - Avoid robotic phrases like "Here are..." or "The following..."
 22. Do NOT repeat duplicate emails. Group similar emails together.
 23. Do NOT exaggerate counts. If multiple similar emails exist, group them and describe collectively (e.g., "Microsoft emails with verification codes") instead of counting each one.
+24. If multiple emails have the same sender and a very similar subject, collapse them into one summary unless the user explicitly asked for itemized email-by-email output.
 
 EXAMPLES:
 User: summarize last 3 emails
@@ -68,6 +75,7 @@ Assistant:
 Your latest email is about a security login alert, informing you of a new device login and advising you to take action if it wasn't you.
 
 Current batch: {email_count} emails loaded (up to last {settings.max_emails}).
+FACTS FROM SERVER (trust these counts): priority_tagged={priority_count if priority_count is not None else "unknown"}, other={non_priority_count if non_priority_count is not None else "unknown"}. Do not contradict these counts; explain using the emails.
 Today (local): {today_local}  |  Timezone: {tz}
 """
 
@@ -80,10 +88,21 @@ Question: {query}
 """
 
 
-def estimate_overhead_tokens(settings: Settings, query: str) -> int:
+def estimate_overhead_tokens(
+    settings: Settings,
+    query: str,
+    *,
+    priority_count: int | None = None,
+    non_priority_count: int | None = None,
+) -> int:
     from app.tokens import count_tokens
 
-    sys_t = build_system_message(settings, email_count=0)
+    sys_t = build_system_message(
+        settings,
+        email_count=0,
+        priority_count=priority_count,
+        non_priority_count=non_priority_count,
+    )
     wrap = f"""Emails:
 
 
@@ -108,12 +127,19 @@ async def ask_ai(
     context: str,
     query: str,
     email_count: int,
+    priority_count: int | None = None,
+    non_priority_count: int | None = None,
 ) -> str:
     if not settings.gemini_api_key:
         raise RuntimeError("GEMINI_API_KEY is not set")
 
     client = genai.Client(api_key=settings.gemini_api_key)
-    system = build_system_message(settings, email_count=email_count)
+    system = build_system_message(
+        settings,
+        email_count=email_count,
+        priority_count=priority_count,
+        non_priority_count=non_priority_count,
+    )
     user = build_user_message(context, query)
 
     config = types.GenerateContentConfig(

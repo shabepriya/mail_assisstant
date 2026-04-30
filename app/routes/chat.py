@@ -156,7 +156,16 @@ async def chat(
             stale=stale,
         )
 
+    priority_count = sum(1 for e in emails if bool(e.get("priority")))
+    non_priority_count = len(emails) - priority_count
+
     context = emails_to_context(emails, settings.max_body_chars)
+    overhead = estimate_overhead_tokens(
+        settings,
+        body.query,
+        priority_count=priority_count,
+        non_priority_count=non_priority_count,
+    )
     tokens_used = count_tokens(context, settings.gemini_model) + overhead
 
     final_count = len(emails)
@@ -167,6 +176,8 @@ async def chat(
             context=context,
             query=body.query,
             email_count=final_count,
+            priority_count=priority_count,
+            non_priority_count=non_priority_count,
         )
         answer = validate_ai_output(answer)
     except Exception:
@@ -186,5 +197,7 @@ async def chat(
         filtered_count=filtered_count,
         cache_age_s=cache_age_s,
         tokens_used=tokens_used,
+        priority_email_count=priority_count,
+        other_email_count=non_priority_count,
         stale=stale,
     )

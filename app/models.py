@@ -13,6 +13,8 @@ class ChatResponse(BaseModel):
     filtered_count: int
     cache_age_s: float
     tokens_used: int
+    priority_email_count: int | None = None
+    other_email_count: int | None = None
     stale: bool = False
 
 
