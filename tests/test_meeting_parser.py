@@ -29,3 +29,54 @@ def test_extract_meeting_proposal_timezone_conversion() -> None:
     proposals = extract_meeting_proposals_from_emails(emails, settings)
     assert len(proposals) == 1
     assert proposals[0].timezone == settings.user_timezone
+
+
+def test_extract_meeting_proposal_from_html_google_meet() -> None:
+    settings = get_settings()
+    emails = [
+        {
+            "subject": "Google Meet Invitation",
+            "body": "<div>Join via <b>Google Meet</b></div><div>Tomorrow at 9 PM</div>",
+        }
+    ]
+    proposals = extract_meeting_proposals_from_emails(emails, settings)
+    assert len(proposals) == 1
+    assert proposals[0].start_local.hour == 21
+
+
+def test_extract_meeting_proposal_supports_24h_time() -> None:
+    settings = get_settings()
+    emails = [
+        {
+            "subject": "Client call tomorrow",
+            "body": "Please join call tomorrow at 21:00.",
+        }
+    ]
+    proposals = extract_meeting_proposals_from_emails(emails, settings)
+    assert len(proposals) == 1
+    assert proposals[0].start_local.hour == 21
+
+
+def test_extract_meeting_proposal_supports_dotted_time() -> None:
+    settings = get_settings()
+    emails = [
+        {
+            "subject": "Zoom meeting tomorrow",
+            "body": "Zoom meeting tomorrow at 9.00 PM",
+        }
+    ]
+    proposals = extract_meeting_proposals_from_emails(emails, settings)
+    assert len(proposals) == 1
+    assert proposals[0].start_local.hour == 21
+
+
+def test_extract_meeting_ignores_generic_meet_phrase() -> None:
+    settings = get_settings()
+    emails = [
+        {
+            "subject": "Catch up tomorrow",
+            "body": "Nice to meet you tomorrow at 9 PM.",
+        }
+    ]
+    proposals = extract_meeting_proposals_from_emails(emails, settings)
+    assert proposals == []

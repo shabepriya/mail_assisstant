@@ -246,6 +246,35 @@
       return el;
     }
 
+    function ensureAssistantStructure(targetEl) {
+      let textEl = targetEl.querySelector(".assistant-text");
+      let actionsEl = targetEl.querySelector(".calendar-actions");
+      if (!textEl) {
+        targetEl.textContent = "";
+        textEl = document.createElement("div");
+        textEl.className = "assistant-text";
+        targetEl.appendChild(textEl);
+      }
+      if (!actionsEl) {
+        actionsEl = document.createElement("div");
+        actionsEl.className = "calendar-actions";
+        actionsEl.style.marginTop = "10px";
+        targetEl.appendChild(actionsEl);
+      }
+      return { textEl, actionsEl };
+    }
+
+    function setAssistantMessage(targetEl, messageText, staleNote) {
+      const { textEl, actionsEl } = ensureAssistantStructure(targetEl);
+      actionsEl.innerHTML = "";
+      textEl.textContent = messageText || "";
+      if (staleNote) {
+        const note = document.createElement("span");
+        note.textContent = "\n\n(note: served from cached emails; live email API may be unavailable)";
+        textEl.appendChild(note);
+      }
+    }
+
     async function sendCalendarAction(action, proposalId) {
       send.disabled = true;
       refresh.disabled = true;
@@ -265,13 +294,17 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          pending.textContent = (data.error || data.detail || res.statusText) +
-            (data.request_id ? "\n\nrequest_id: " + data.request_id : "");
+          setAssistantMessage(
+            pending,
+            (data.error || data.detail || res.statusText) +
+            (data.request_id ? "\n\nrequest_id: " + data.request_id : ""),
+            false,
+          );
           return;
         }
-        pending.textContent = data.response || "";
+        setAssistantMessage(pending, data.response || "", false);
       } catch (e) {
-        pending.textContent = "Network error: " + e;
+        setAssistantMessage(pending, "Network error: " + e, false);
       } finally {
         send.disabled = false;
         refresh.disabled = false;
@@ -280,9 +313,10 @@
     }
 
     function renderCalendarProposalButtons(targetEl, proposals) {
+      const { actionsEl } = ensureAssistantStructure(targetEl);
+      actionsEl.innerHTML = "";
       if (!Array.isArray(proposals) || proposals.length === 0) return;
       const wrap = document.createElement("div");
-      wrap.style.marginTop = "10px";
       wrap.style.display = "flex";
       wrap.style.flexDirection = "column";
       wrap.style.gap = "8px";
@@ -326,7 +360,7 @@
         wrap.appendChild(row);
       });
 
-      targetEl.appendChild(wrap);
+      actionsEl.appendChild(wrap);
     }
 
     async function doChat(forceRefresh) {
@@ -353,20 +387,21 @@
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-          pending.textContent = (data.error || data.detail || res.statusText) +
-            (data.request_id ? "\n\nrequest_id: " + data.request_id : "");
+          setAssistantMessage(
+            pending,
+            (data.error || data.detail || res.statusText) +
+            (data.request_id ? "\n\nrequest_id: " + data.request_id : ""),
+            false,
+          );
           return;
         }
-        pending.textContent = data.response || "";
+        setAssistantMessage(pending, data.response || "", Boolean(data.stale));
         renderCalendarProposalButtons(pending, data.calendar_proposals);
         if (typeof data.cache_age_s === "number") {
           setCacheLine(data.cache_age_s);
         }
-        if (data.stale) {
-          pending.textContent += "\n\n(note: served from cached emails; live email API may be unavailable)";
-        }
       } catch (e) {
-        pending.textContent = "Network error: " + e;
+        setAssistantMessage(pending, "Network error: " + e, false);
       } finally {
         send.disabled = false;
         refresh.disabled = false;
