@@ -7,7 +7,6 @@ from app.email_client import fetch_emails, _extract_message_list
 
 async def run():
     settings = get_settings()
-    settings.email_account_id = "5549143e-2922-4818-81d6-82d1f42d631f"
     settings.mock_emails = False
     
     start = time.time()
