@@ -52,6 +52,19 @@ def test_sanitize_emails_deduplicates_with_normalized_from_subject_fallback() ->
     assert cleaned[0]["body"] == "Code [REDACTED_CODE]"
 
 
+def test_sanitize_emails_priority_interview_keyword() -> None:
+    emails = [
+        {
+            "id": "99",
+            "from": "hr@example.com",
+            "subject": "Interview schedule",
+            "body": "We would like to schedule your interview.",
+        }
+    ]
+    cleaned = sanitize_emails(emails)
+    assert cleaned[0]["priority"] is True
+
+
 def test_sanitize_emails_priority_keyword_and_body_only_masking() -> None:
     emails = [
         {

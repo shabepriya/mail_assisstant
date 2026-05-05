@@ -10,6 +10,7 @@ from app.cache import EmailCache
 from app.config import get_settings
 from app.logging_config import setup_logging
 from app.pending_calendar import PendingCalendarStore
+from app.pending_reply import PendingReplyStore
 from app.routes import chat as chat_routes
 from app.routes import health as health_routes
 
@@ -21,6 +22,7 @@ async def lifespan(app: FastAPI):
     app.state.http_client = httpx.AsyncClient(timeout=settings.email_api_timeout, trust_env=False)
     app.state.cache = EmailCache(settings.cache_ttl_seconds)
     app.state.pending_calendar = PendingCalendarStore(settings.calendar_pending_ttl_seconds)
+    app.state.pending_reply = PendingReplyStore(settings.reply_pending_ttl_seconds)
     app.state.start = time.monotonic()
     yield
     await app.state.http_client.aclose()

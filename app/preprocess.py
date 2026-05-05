@@ -6,7 +6,20 @@ from bs4 import BeautifulSoup
 from app.datetime_utils import parse_received_at
 
 SENSITIVE_CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
-PRIORITY_KEYWORDS = ("otp", "verification", "login", "security alert", "password")
+PRIORITY_KEYWORDS = (
+    "otp",
+    "verification",
+    "login",
+    "security",
+    "password",
+    "interview",
+    "hr",
+    "deadline",
+    "action required",
+    "urgent",
+    "important",
+    "schedule",
+)
 
 
 def deduplicate_by_id(emails: list[dict]) -> list[dict]:

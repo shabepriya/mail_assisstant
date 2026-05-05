@@ -249,6 +249,7 @@
     function ensureAssistantStructure(targetEl) {
       let textEl = targetEl.querySelector(".assistant-text");
       let actionsEl = targetEl.querySelector(".calendar-actions");
+      let replyEl = targetEl.querySelector(".reply-actions");
       if (!textEl) {
         targetEl.textContent = "";
         textEl = document.createElement("div");
@@ -261,12 +262,19 @@
         actionsEl.style.marginTop = "10px";
         targetEl.appendChild(actionsEl);
       }
-      return { textEl, actionsEl };
+      if (!replyEl) {
+        replyEl = document.createElement("div");
+        replyEl.className = "reply-actions";
+        replyEl.style.marginTop = "8px";
+        targetEl.appendChild(replyEl);
+      }
+      return { textEl, actionsEl, replyEl };
     }
 
     function setAssistantMessage(targetEl, messageText, staleNote) {
-      const { textEl, actionsEl } = ensureAssistantStructure(targetEl);
+      const { textEl, actionsEl, replyEl } = ensureAssistantStructure(targetEl);
       actionsEl.innerHTML = "";
+      replyEl.innerHTML = "";
       textEl.textContent = messageText || "";
       if (staleNote) {
         const note = document.createElement("span");
@@ -363,6 +371,182 @@
       actionsEl.appendChild(wrap);
     }
 
+    function renderEmailReplyActions(targetEl, actions) {
+      const { replyEl } = ensureAssistantStructure(targetEl);
+      replyEl.innerHTML = "";
+      if (!Array.isArray(actions) || actions.length === 0) return;
+      const wrap = document.createElement("div");
+      wrap.style.display = "flex";
+      wrap.style.flexDirection = "column";
+      wrap.style.gap = "8px";
+      const title = document.createElement("div");
+      title.style.fontSize = "12px";
+      title.style.color = "var(--muted)";
+      title.textContent = "Reply actions";
+      wrap.appendChild(title);
+      const composerHost = document.createElement("div");
+      composerHost.className = "reply-composer-host";
+      wrap.appendChild(composerHost);
+
+      actions.forEach((a) => {
+        const row = document.createElement("div");
+        row.style.border = "1px solid var(--border)";
+        row.style.borderRadius = "10px";
+        row.style.padding = "8px";
+        row.style.background = "var(--panel-2)";
+        const line = document.createElement("div");
+        line.style.fontSize = "13px";
+        line.style.marginBottom = "6px";
+        line.textContent = `${a.subject || "(no subject)"} — ${a.sender || "unknown"}`;
+        row.appendChild(line);
+        const prev = document.createElement("div");
+        prev.style.fontSize = "12px";
+        prev.style.color = "var(--muted)";
+        prev.style.marginBottom = "8px";
+        prev.textContent = a.preview || "";
+        row.appendChild(prev);
+        const btn = document.createElement("button");
+        btn.textContent = "Reply";
+        btn.onclick = () => openReplyDraft(composerHost, a.action_id);
+        row.appendChild(btn);
+        wrap.appendChild(row);
+      });
+      replyEl.appendChild(wrap);
+    }
+
+    async function openReplyDraft(hostEl, actionId) {
+      hostEl.innerHTML = "";
+      const loading = document.createElement("div");
+      loading.style.fontSize = "13px";
+      loading.style.marginTop = "6px";
+      loading.textContent = "Loading draft…";
+      hostEl.appendChild(loading);
+      send.disabled = true;
+      refresh.disabled = true;
+      clear.disabled = true;
+      try {
+        const res = await fetch("/ai/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: "",
+            force_refresh: false,
+            client_session_id: clientSessionId,
+            email_reply_action: "draft",
+            email_reply_action_id: actionId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        hostEl.innerHTML = "";
+        if (!res.ok) {
+          hostEl.textContent = (data.error || data.detail || res.statusText) +
+            (data.request_id ? "\nrequest_id: " + data.request_id : "");
+          return;
+        }
+        const c = data.reply_composer;
+        if (!c) {
+          hostEl.textContent = data.response || "No draft returned.";
+          return;
+        }
+        const box = document.createElement("div");
+        box.style.border = "1px solid var(--border)";
+        box.style.borderRadius = "10px";
+        box.style.padding = "10px";
+        box.style.marginTop = "8px";
+        box.style.background = "var(--panel-2)";
+        const cap = document.createElement("div");
+        cap.style.fontSize = "12px";
+        cap.style.color = "var(--muted)";
+        cap.style.marginBottom = "6px";
+        cap.textContent = "AI draft (editable)";
+        box.appendChild(cap);
+        const mkLabel = (t) => {
+          const el = document.createElement("label");
+          el.textContent = t;
+          el.style.display = "block";
+          el.style.fontSize = "12px";
+          el.style.marginTop = "6px";
+          return el;
+        };
+        const toIn = document.createElement("input");
+        toIn.type = "text";
+        toIn.value = c.to || "";
+        toIn.style.width = "100%";
+        toIn.style.marginTop = "4px";
+        box.appendChild(mkLabel("To"));
+        box.appendChild(toIn);
+        const subIn = document.createElement("input");
+        subIn.type = "text";
+        subIn.value = c.subject || "";
+        subIn.style.width = "100%";
+        subIn.style.marginTop = "4px";
+        box.appendChild(mkLabel("Subject"));
+        box.appendChild(subIn);
+        const bodyTa = document.createElement("textarea");
+        bodyTa.value = c.body || "";
+        bodyTa.rows = 8;
+        bodyTa.style.width = "100%";
+        bodyTa.style.marginTop = "4px";
+        bodyTa.style.fontFamily = "inherit";
+        box.appendChild(mkLabel("Body"));
+        box.appendChild(bodyTa);
+        const rowBtn = document.createElement("div");
+        rowBtn.style.display = "flex";
+        rowBtn.style.gap = "8px";
+        rowBtn.style.marginTop = "10px";
+        const sendBtn = document.createElement("button");
+        sendBtn.textContent = "Send";
+        sendBtn.className = "primary";
+        sendBtn.onclick = async () => {
+          sendBtn.disabled = true;
+          try {
+            const res2 = await fetch("/ai/chat", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                query: "",
+                force_refresh: false,
+                client_session_id: clientSessionId,
+                email_reply_action: "send",
+                email_reply_action_id: c.action_id,
+                reply_to: toIn.value.trim(),
+                reply_subject: subIn.value.trim(),
+                reply_body: bodyTa.value,
+              }),
+            });
+            const d2 = await res2.json().catch(() => ({}));
+            if (!res2.ok) {
+              alert((d2.error || d2.detail || res2.statusText) + "");
+              sendBtn.disabled = false;
+              return;
+            }
+            hostEl.innerHTML = "";
+            const done = document.createElement("div");
+            done.style.fontSize = "13px";
+            done.textContent = d2.response || "Done.";
+            hostEl.appendChild(done);
+          } catch (err) {
+            alert("Network error: " + err);
+            sendBtn.disabled = false;
+          }
+        };
+        const cancelBtn = document.createElement("button");
+        cancelBtn.textContent = "Cancel";
+        cancelBtn.onclick = () => { hostEl.innerHTML = ""; };
+        rowBtn.appendChild(sendBtn);
+        rowBtn.appendChild(cancelBtn);
+        box.appendChild(rowBtn);
+        hostEl.appendChild(box);
+      } catch (e) {
+        hostEl.innerHTML = "";
+        hostEl.textContent = "Network error: " + e;
+      } finally {
+        send.disabled = false;
+        refresh.disabled = false;
+        clear.disabled = false;
+      }
+    }
+
     async function doChat(forceRefresh) {
       const query = q.value.trim();
       if (!query) {
@@ -397,6 +581,7 @@
         }
         setAssistantMessage(pending, data.response || "", Boolean(data.stale));
         renderCalendarProposalButtons(pending, data.calendar_proposals);
+        renderEmailReplyActions(pending, data.email_actions);
         if (typeof data.cache_age_s === "number") {
           setCacheLine(data.cache_age_s);
         }

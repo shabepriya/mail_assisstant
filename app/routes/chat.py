@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 
-from app.ai import ask_ai, estimate_overhead_tokens, validate_ai_output
+from app.ai import ask_ai, estimate_overhead_tokens, generate_reply_draft, validate_ai_output
 from app.config import Settings, get_settings
 from app.email_client import EmailAPIError, fetch_emails
 from app.filters import (
@@ -14,6 +14,7 @@ from app.filters import (
     filter_by_sender,
     filter_today,
     is_today_intent,
+    wants_important_mail_help,
     wants_meeting_calendar_help,
 )
 from app.google_calendar import GoogleCalendarClient
@@ -22,8 +23,16 @@ from app.meeting_parser import (
     TIME_PATTERN,
     extract_meeting_proposals_from_emails,
 )
-from app.models import CalendarProposalPayload, ChatRequest, ChatResponse
+from app.gmail_send import send_plain_message
+from app.models import (
+    CalendarProposalPayload,
+    ChatRequest,
+    ChatResponse,
+    EmailReplyActionPayload,
+    ReplyComposerPayload,
+)
 from app.pending_calendar import PendingProposal
+from app.pending_reply import PendingReplySnapshot, PendingReplyStore
 from app.preprocess import (
     clean_body,
     emails_to_context,
@@ -113,6 +122,21 @@ def _build_fallback_from_ai(
     return _to_payload(candidate, settings.user_timezone)
 
 
+def _reply_subject_line(original: str) -> str:
+    s = (original or "").strip() or "(no subject)"
+    if s.lower().startswith("re:"):
+        return s[:500]
+    return f"Re: {s}"[:500]
+
+
+def _select_reply_targets(emails: list[dict]) -> list[dict]:
+    with_id = [e for e in emails if str(e.get("id", "")).strip()]
+    priority_rows = [e for e in with_id if e.get("priority")]
+    if priority_rows:
+        return priority_rows[:10]
+    return with_id[:2]
+
+
 @router.post("/chat", response_model=ChatResponse)
 async def chat(
     request: Request,
@@ -123,8 +147,96 @@ async def chat(
     client = request.app.state.http_client
     cache = request.app.state.cache
     pending_store = request.app.state.pending_calendar
+    reply_store: PendingReplyStore = request.app.state.pending_reply
     session_id = _resolve_session_id(request, body)
     calendar_client = GoogleCalendarClient(client, settings)
+
+    if body.email_reply_action == "draft":
+        if not body.email_reply_action_id:
+            return ChatResponse(
+                response="Missing reply action id.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        snap = await reply_store.get(session_id, body.email_reply_action_id)
+        if not snap:
+            return ChatResponse(
+                response="That reply action is no longer available. Please ask again.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        try:
+            draft_body = await generate_reply_draft(
+                settings,
+                from_addr=snap.from_addr,
+                subject=snap.subject,
+                body_plain=snap.body_plain,
+            )
+        except Exception:
+            logger.exception("reply_draft_failed request_id=%s", request_id)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "error": "AI service temporarily unavailable.",
+                    "request_id": request_id,
+                },
+            ) from None
+        composer = ReplyComposerPayload(
+            action_id=snap.action_id,
+            to=snap.from_addr,
+            subject=_reply_subject_line(snap.subject),
+            body=draft_body,
+        )
+        return ChatResponse(
+            response="Here is an editable draft based on that email.",
+            request_id=request_id,
+            email_count=0,
+            filtered_count=0,
+            cache_age_s=0.0,
+            tokens_used=0,
+            reply_composer=composer,
+        )
+
+    if body.email_reply_action == "send":
+        if not body.email_reply_action_id:
+            return ChatResponse(
+                response="Missing reply action id.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        to_addr = (body.reply_to or "").strip()
+        subj = (body.reply_subject or "").strip()
+        body_txt = (body.reply_body or "").strip()
+        if not to_addr or not subj or not body_txt:
+            return ChatResponse(
+                response="Please fill To, Subject, and Body before sending.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        send_msg = await send_plain_message(
+            settings, to_addr=to_addr, subject=subj, body=body_txt
+        )
+        await reply_store.delete(session_id, body.email_reply_action_id)
+        return ChatResponse(
+            response=send_msg,
+            request_id=request_id,
+            email_count=0,
+            filtered_count=0,
+            cache_age_s=0.0,
+            tokens_used=0,
+        )
 
     if body.calendar_action in {"approve", "dismiss"}:
         if not body.calendar_proposal_id:
@@ -430,6 +542,51 @@ async def chat(
             },
         ) from None
 
+    email_actions_list: list[EmailReplyActionPayload] | None = None
+    # Reply actions attach for any important/priority-style question with a non-empty
+    # batch (not only when the query mentions "today" — e.g. "any important mail?").
+    if wants_important_mail_help(body.query) and emails:
+        targets = _select_reply_targets(emails)
+        payloads_actions: list[EmailReplyActionPayload] = []
+        for e in targets:
+            aid = PendingReplyStore.new_action_id()
+            plain = clean_body(
+                truncate_body_raw(str(e.get("body") or ""), settings.max_body_chars),
+                settings.max_body_chars,
+            )
+            preview = plain.replace("\n", " ").strip()
+            if len(preview) > 200:
+                preview = preview[:197] + "..."
+            subj = str(e.get("subject") or "(no subject)")[:200]
+            from_addr = str(e.get("from") or "unknown")[:320]
+            em_id = str(e.get("id", "")).strip()
+            await reply_store.put(
+                PendingReplySnapshot(
+                    action_id=aid,
+                    session_id=session_id,
+                    email_id=em_id,
+                    from_addr=from_addr,
+                    subject=subj,
+                    body_plain=plain[:8000],
+                )
+            )
+            payloads_actions.append(
+                EmailReplyActionPayload(
+                    action_id=aid,
+                    email_id=em_id,
+                    sender=from_addr,
+                    sender_email=from_addr if "@" in from_addr else None,
+                    subject=subj,
+                    preview=preview or "(no preview)",
+                )
+            )
+        email_actions_list = payloads_actions
+        if email_actions_list:
+            answer = (
+                answer
+                + "\n\nYou can use the Reply buttons to draft a response to each listed email."
+            )
+
     calendar_payloads: list[CalendarProposalPayload] | None = None
     if (
         wants_meeting_calendar_help(body.query)
@@ -471,5 +628,6 @@ async def chat(
         priority_email_count=priority_count,
         other_email_count=non_priority_count,
         calendar_proposals=calendar_payloads,
+        email_actions=email_actions_list,
         stale=stale,
     )

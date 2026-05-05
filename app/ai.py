@@ -190,3 +190,59 @@ async def ask_ai(
         raise last_exc
 
     return ""
+
+
+REPLY_DRAFT_SYSTEM = """You write ONLY the body of a professional email reply.
+Rules:
+- Base every sentence ONLY on the Original email below. Do not invent facts, dates, meetings, or agreements.
+- Do not confirm anything not explicitly stated by the sender.
+- If something important is missing, use neutral wording or one short clarifying question.
+- Do not include Subject or To lines. No markdown code fences. Plain text only.
+- Keep it concise (under 200 words).
+"""
+
+
+async def generate_reply_draft(
+    settings: Settings,
+    *,
+    from_addr: str,
+    subject: str,
+    body_plain: str,
+) -> str:
+    """Return plain-text reply body only (no subject/to lines)."""
+    if not settings.gemini_api_key:
+        raise RuntimeError("GEMINI_API_KEY is not set")
+
+    client = genai.Client(api_key=settings.gemini_api_key)
+    user = (
+        f"Original email From line: {from_addr}\n"
+        f"Subject: {subject}\n"
+        f"Body:\n{body_plain}\n\n"
+        "Write the reply body only."
+    )
+    config = types.GenerateContentConfig(
+        system_instruction=REPLY_DRAFT_SYSTEM,
+        max_output_tokens=min(512, settings.gemini_max_tokens),
+    )
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            resp = await client.aio.models.generate_content(
+                model=settings.gemini_model,
+                contents=user,
+                config=config,
+            )
+            text = validate_ai_output(resp.text or "")
+            return text or "Thank you for your email. I will follow up shortly."
+        except APIError as e:
+            if getattr(e, "code", None) == 429 or "429" in str(e):
+                last_exc = e
+                await asyncio.sleep(0.5 * (2**attempt))
+            else:
+                raise e
+        except Exception as e:
+            last_exc = e
+            break
+    if last_exc:
+        raise last_exc
+    return "Thank you for your email. I will follow up shortly."

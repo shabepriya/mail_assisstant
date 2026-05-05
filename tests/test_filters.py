@@ -2,6 +2,7 @@ from app.filters import (
     extract_sender_query,
     filter_by_sender,
     is_today_intent,
+    wants_important_mail_help,
     wants_meeting_calendar_help,
 )
 
@@ -47,3 +48,10 @@ def test_wants_meeting_calendar_help() -> None:
     assert wants_meeting_calendar_help("any meeting tomorrow?") is True
     assert wants_meeting_calendar_help("schedule call") is True
     assert wants_meeting_calendar_help("summarize inbox") is False
+
+
+def test_wants_important_mail_help() -> None:
+    assert wants_important_mail_help("any important mail today?") is True
+    assert wants_important_mail_help("priority emails today") is True
+    assert wants_important_mail_help("priority emails") is True
+    assert wants_important_mail_help("summarize inbox") is False

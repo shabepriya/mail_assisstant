@@ -23,6 +23,22 @@ def is_today_intent(query: str) -> bool:
     return any(k in q for k in keywords)
 
 
+def wants_important_mail_help(query: str) -> bool:
+    q = query.lower()
+    hints = (
+        "important",
+        "priority",
+        "urgent",
+        "critical",
+        "must read",
+        "must-read",
+        "action items",
+        "need to respond",
+        "need reply",
+    )
+    return any(h in q for h in hints)
+
+
 def wants_meeting_calendar_help(query: str) -> bool:
     q = query.lower()
     hints = (

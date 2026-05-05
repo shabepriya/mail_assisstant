@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     google_calendar_token_path: str = Field(
         default="", validation_alias="GOOGLE_CALENDAR_TOKEN_PATH"
     )
+    gmail_send_enabled: bool = Field(default=False, validation_alias="GMAIL_SEND_ENABLED")
+    reply_pending_ttl_seconds: float = Field(
+        default=900.0, ge=60.0, validation_alias="REPLY_PENDING_TTL_SECONDS"
+    )
 
     log_level: str = Field(default="INFO", validation_alias="LOG_LEVEL")
     cors_origins: str = Field(
