@@ -9,6 +9,7 @@ class PendingReplySnapshot:
     action_id: str
     session_id: str
     email_id: str
+    thread_id: str
     from_addr: str
     subject: str
     body_plain: str

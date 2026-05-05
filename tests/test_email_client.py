@@ -98,6 +98,23 @@ def test_normalize_email_missing_headers_fallbacks() -> None:
     assert normalized["subject"] == ""
     assert normalized["body"] == "text"
     assert normalized["received_at"] == ""
+    assert normalized["thread_id"] == ""
+
+
+def test_normalize_email_thread_id_from_api() -> None:
+    normalized = normalize_email(
+        {"id": "m-t", "snippet": "x", "threadId": "thr-abc", "payload": {"headers": []}},
+        "acc-x",
+    )
+    assert normalized["thread_id"] == "thr-abc"
+
+
+def test_normalize_email_thread_id_snake_case() -> None:
+    normalized = normalize_email(
+        {"id": "m-u", "snippet": "x", "thread_id": "thr-xyz", "payload": {"headers": []}},
+        "acc-x",
+    )
+    assert normalized["thread_id"] == "thr-xyz"
 
 
 def test_normalize_email_sender_and_body_priority() -> None:

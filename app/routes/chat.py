@@ -1,5 +1,6 @@
 import logging
 import os
+import re
 import uuid
 from datetime import timedelta
 from zoneinfo import ZoneInfo
@@ -14,7 +15,6 @@ from app.filters import (
     filter_by_sender,
     filter_today,
     is_today_intent,
-    wants_important_mail_help,
     wants_meeting_calendar_help,
 )
 from app.google_calendar import GoogleCalendarClient
@@ -23,7 +23,7 @@ from app.meeting_parser import (
     TIME_PATTERN,
     extract_meeting_proposals_from_emails,
 )
-from app.gmail_send import send_plain_message
+from app.gmail_api import fetch_thread_id, send_reply_via_service
 from app.models import (
     CalendarProposalPayload,
     ChatRequest,
@@ -129,12 +129,66 @@ def _reply_subject_line(original: str) -> str:
     return f"Re: {s}"[:500]
 
 
-def _select_reply_targets(emails: list[dict]) -> list[dict]:
-    with_id = [e for e in emails if str(e.get("id", "")).strip()]
-    priority_rows = [e for e in with_id if e.get("priority")]
-    if priority_rows:
-        return priority_rows[:10]
-    return with_id[:2]
+_ADDR_IN_BRACKETS = re.compile(r"<([^<>]+)>")
+
+
+def _extract_email(addr: str) -> str:
+    """Pull the bare address out of 'Name <addr@x>'; otherwise return normalized input."""
+    if not addr:
+        return ""
+    m = _ADDR_IN_BRACKETS.search(addr)
+    return (m.group(1) if m else addr).strip().lower()
+
+
+_SYSTEM_SENDER_TOKENS = (
+    "mailer-daemon",
+    "postmaster",
+    "no-reply",
+    "noreply",
+    "do-not-reply",
+    "donotreply",
+    "bounce@",
+    "bounces@",
+    "automated@",
+    "daemon@",
+    "system@",
+    "notification",
+    "notifications",
+    "updates@",
+    "mailgun",
+    "facebookmail",
+    "linkedin",
+)
+
+_SYSTEM_SENDER_DOMAINS = (
+    "mailgun.com",
+    "facebookmail.com",
+    "linkedin.com",
+)
+
+
+def _is_system_sender(addr: str) -> bool:
+    email = _extract_email(addr)
+    if any(tok in email for tok in _SYSTEM_SENDER_TOKENS):
+        return True
+    if any(domain in email for domain in _SYSTEM_SENDER_DOMAINS):
+        return True
+    return False
+
+
+def _select_reply_targets(emails: list[dict], limit: int) -> list[dict]:
+    out: list[dict] = []
+    for e in emails:
+        if not str(e.get("id", "")).strip():
+            continue
+        if not str(e.get("subject", "")).strip():
+            continue
+        if _is_system_sender(str(e.get("from", ""))):
+            continue
+        out.append(e)
+        if len(out) >= limit:
+            break
+    return out
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -213,6 +267,16 @@ async def chat(
                 cache_age_s=0.0,
                 tokens_used=0,
             )
+        snap = await reply_store.get(session_id, body.email_reply_action_id)
+        if not snap:
+            return ChatResponse(
+                response="That reply action is no longer available. Please ask again.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
         to_addr = (body.reply_to or "").strip()
         subj = (body.reply_subject or "").strip()
         body_txt = (body.reply_body or "").strip()
@@ -225,12 +289,42 @@ async def chat(
                 cache_age_s=0.0,
                 tokens_used=0,
             )
-        send_msg = await send_plain_message(
-            settings, to_addr=to_addr, subject=subj, body=body_txt
+        thread_id = (snap.thread_id or "").strip()
+        if not thread_id and snap.email_id:
+            fetched = await fetch_thread_id(client, settings, message_id=snap.email_id)
+            thread_id = (fetched or "").strip()
+            if thread_id:
+                logger.info(
+                    "thread_id_resolved_lazily email_id=%s thread_id=%s",
+                    snap.email_id,
+                    thread_id,
+                )
+            else:
+                logger.warning(
+                    "thread_id_unresolved email_id=%s — reply may start a new thread",
+                    snap.email_id,
+                )
+
+        ok, err_msg = await send_reply_via_service(
+            client,
+            settings,
+            to=to_addr,
+            subject=subj,
+            content=body_txt,
+            thread_id=thread_id,
         )
+        if not ok:
+            return ChatResponse(
+                response=err_msg,
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
         await reply_store.delete(session_id, body.email_reply_action_id)
         return ChatResponse(
-            response=send_msg,
+            response=f"Email sent successfully to {to_addr} ✅",
             request_id=request_id,
             email_count=0,
             filtered_count=0,
@@ -543,10 +637,15 @@ async def chat(
         ) from None
 
     email_actions_list: list[EmailReplyActionPayload] | None = None
-    # Reply actions attach for any important/priority-style question with a non-empty
-    # batch (not only when the query mentions "today" — e.g. "any important mail?").
-    if wants_important_mail_help(body.query) and emails:
-        targets = _select_reply_targets(emails)
+    if emails:
+        targets = _select_reply_targets(emails, settings.reply_action_max)
+        logger.info(
+            "reply_actions_attached request_id=%s session_id=%s count=%d total_in_batch=%d",
+            request_id,
+            session_id,
+            len(targets),
+            len(emails),
+        )
         payloads_actions: list[EmailReplyActionPayload] = []
         for e in targets:
             aid = PendingReplyStore.new_action_id()
@@ -565,6 +664,7 @@ async def chat(
                     action_id=aid,
                     session_id=session_id,
                     email_id=em_id,
+                    thread_id=str(e.get("thread_id", "")).strip(),
                     from_addr=from_addr,
                     subject=subj,
                     body_plain=plain[:8000],
@@ -584,7 +684,7 @@ async def chat(
         if email_actions_list:
             answer = (
                 answer
-                + "\n\nYou can use the Reply buttons to draft a response to each listed email."
+                + "\n\nUse the Reply buttons below to respond to any of these emails."
             )
 
     calendar_payloads: list[CalendarProposalPayload] | None = None

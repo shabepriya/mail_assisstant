@@ -95,6 +95,9 @@ def normalize_email(raw_email: dict[str, Any], account_id: str) -> dict[str, Any
         "subject": extract_header(headers, "Subject"),
         "body": _extract_body(raw_email),
         "received_at": _extract_received_at_iso(raw_email),
+        "thread_id": str(
+            raw_email.get("threadId") or raw_email.get("thread_id") or ""
+        ).strip(),
     }
 
 

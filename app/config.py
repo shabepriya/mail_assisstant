@@ -30,6 +30,7 @@ class Settings(BaseSettings):
     email_category: str = Field(default="inbox", validation_alias="EMAIL_CATEGORY")
     email_api_key: str = Field(default="", validation_alias="EMAIL_API_KEY")
     mock_emails: bool = Field(default=True, validation_alias="MOCK_EMAILS")
+    reply_action_max: int = Field(default=5, ge=1, le=20, validation_alias="REPLY_ACTION_MAX")
     email_api_supports_since: bool = Field(
         default=False, validation_alias="EMAIL_API_SUPPORTS_SINCE"
     )

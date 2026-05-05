@@ -32,7 +32,8 @@ def test_chat_ok(client: TestClient, patch_ask_ai: None) -> None:
     r = client.post("/ai/chat", json={"query": "Summarize emails"})
     assert r.status_code == 200
     data = r.json()
-    assert data["response"] == "mocked-ai-response"
+    assert data["response"].startswith("mocked-ai-response")
+    assert "Use the Reply buttons below" in data["response"]
     assert "request_id" in data
     assert "cache_age_s" in data
     assert "email_count" in data
@@ -43,7 +44,9 @@ def test_chat_ok(client: TestClient, patch_ask_ai: None) -> None:
 def test_chat_not_available_sentence(client: TestClient, patch_ask_ai: None) -> None:
     r = client.post("/ai/chat", json={"query": "missingxyz"})
     assert r.status_code == 200
-    assert r.json()["response"] == "Not available in current emails."
+    body = r.json()["response"]
+    assert body.startswith("Not available in current emails.")
+    assert "Use the Reply buttons below" in body
 
 
 def test_chat_sender_filter_no_match(client: TestClient, patch_ask_ai: None) -> None:
@@ -61,7 +64,9 @@ def test_chat_sender_filter_match(client: TestClient, patch_ask_ai: None) -> Non
         "/ai/chat", json={"query": "summarize from customer@gmail.com"}
     )
     assert r.status_code == 200
-    assert r.json()["response"] == "mocked-ai-response"
+    body = r.json()["response"]
+    assert body.startswith("mocked-ai-response")
+    assert "Use the Reply buttons below" in body
 
 
 def test_chat_returns_empty_batch_message(
@@ -390,7 +395,7 @@ def test_chat_important_today_fallback_uses_latest_two_when_no_priority(
     assert len(r.json()["email_actions"]) == 2
 
 
-def test_chat_reply_draft_and_send_demo_mode(
+def test_chat_reply_draft_and_send_via_gmail_service(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
 ) -> None:
     async def _emails(*_a, **_k):
@@ -401,6 +406,7 @@ def test_chat_reply_draft_and_send_demo_mode(
                 "subject": "Interview slot",
                 "body": "Please confirm your interview.",
                 "received_at": "2026-05-04T12:00:00Z",
+                "thread_id": "thr-seeded",
             },
         ]
 
@@ -436,8 +442,17 @@ def test_chat_reply_draft_and_send_demo_mode(
     assert d.get("reply_composer")
     assert d["reply_composer"]["body"] == "Mock draft body."
 
-    monkeypatch.setenv("GMAIL_SEND_ENABLED", "false")
-    get_settings.cache_clear()
+    captured: dict[str, str] = {}
+
+    async def _fake_send(_client, _settings, *, to, subject, content, thread_id):
+        captured["to"] = to
+        captured["subject"] = subject
+        captured["content"] = content
+        captured["thread_id"] = thread_id
+        return (True, "")
+
+    monkeypatch.setattr("app.routes.chat.send_reply_via_service", _fake_send)
+
     sent = client.post(
         "/ai/chat",
         json={
@@ -450,5 +465,322 @@ def test_chat_reply_draft_and_send_demo_mode(
             "reply_body": "Thanks.",
         },
     ).json()
-    assert "Sending not configured (demo mode)" in sent["response"]
+    assert "Email sent successfully to hr@example.com ✅" in sent["response"]
+    assert captured["to"] == "hr@example.com"
+    assert captured["subject"] == "Re: Interview slot"
+    assert captured["content"] == "Thanks."
+    assert captured["thread_id"] == "thr-seeded"
+
+
+def test_chat_reply_send_resolves_thread_id_lazily(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "r1",
+                "from": "hr@example.com",
+                "subject": "Interview slot",
+                "body": "Please confirm your interview.",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.routes.chat.filter_today", lambda emails, tz: list(emails))
+
+    first = client.post(
+        "/ai/chat",
+        json={"query": "any important mail today?", "client_session_id": "sess-reply-lazy"},
+    ).json()
+    aid = first["email_actions"][0]["action_id"]
+
+    async def _fake_draft(
+        settings,
+        *,
+        from_addr: str,
+        subject: str,
+        body_plain: str,
+    ) -> str:
+        return "Draft."
+
+    monkeypatch.setattr("app.routes.chat.generate_reply_draft", _fake_draft)
+
+    client.post(
+        "/ai/chat",
+        json={
+            "query": "",
+            "client_session_id": "sess-reply-lazy",
+            "email_reply_action": "draft",
+            "email_reply_action_id": aid,
+        },
+    )
+
+    async def _fake_fetch_thread(_client, _settings, *, message_id):
+        assert message_id == "r1"
+        return "thr_xyz"
+
+    monkeypatch.setattr("app.routes.chat.fetch_thread_id", _fake_fetch_thread)
+
+    captured: dict[str, str] = {}
+
+    async def _fake_send(_client, _settings, *, to, subject, content, thread_id):
+        captured["thread_id"] = thread_id
+        return (True, "")
+
+    monkeypatch.setattr("app.routes.chat.send_reply_via_service", _fake_send)
+
+    sent = client.post(
+        "/ai/chat",
+        json={
+            "query": "",
+            "client_session_id": "sess-reply-lazy",
+            "email_reply_action": "send",
+            "email_reply_action_id": aid,
+            "reply_to": "hr@example.com",
+            "reply_subject": "Re: Interview slot",
+            "reply_body": "Thanks.",
+        },
+    ).json()
+    assert "✅" in sent["response"]
+    assert captured["thread_id"] == "thr_xyz"
+
+
+def test_chat_reply_send_failure_keeps_snapshot(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "r1",
+                "from": "hr@example.com",
+                "subject": "Interview slot",
+                "body": "Please confirm your interview.",
+                "received_at": "2026-05-04T12:00:00Z",
+                "thread_id": "thr-1",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.routes.chat.filter_today", lambda emails, tz: list(emails))
+
+    first = client.post(
+        "/ai/chat",
+        json={"query": "any important mail today?", "client_session_id": "sess-reply-fail"},
+    ).json()
+    aid = first["email_actions"][0]["action_id"]
+
+    async def _fake_draft(
+        settings,
+        *,
+        from_addr: str,
+        subject: str,
+        body_plain: str,
+    ) -> str:
+        return "Draft body."
+
+    monkeypatch.setattr("app.routes.chat.generate_reply_draft", _fake_draft)
+
+    async def _fake_send_fail(*_a, **_k):
+        return (False, "Your Gmail session has expired. Please reconnect your Gmail account.")
+
+    monkeypatch.setattr("app.routes.chat.send_reply_via_service", _fake_send_fail)
+
+    sent = client.post(
+        "/ai/chat",
+        json={
+            "query": "",
+            "client_session_id": "sess-reply-fail",
+            "email_reply_action": "send",
+            "email_reply_action_id": aid,
+            "reply_to": "hr@example.com",
+            "reply_subject": "Re: Interview slot",
+            "reply_body": "Thanks.",
+        },
+    ).json()
+    assert "Your Gmail session has expired" in sent["response"]
+    assert "✅" not in sent["response"]
+
+    d2 = client.post(
+        "/ai/chat",
+        json={
+            "query": "",
+            "client_session_id": "sess-reply-fail",
+            "email_reply_action": "draft",
+            "email_reply_action_id": aid,
+        },
+    ).json()
+    assert d2.get("reply_composer")
+    assert d2["reply_composer"]["body"] == "Draft body."
+
+
+def test_chat_attaches_reply_actions_for_any_query_with_emails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "e1",
+                "from": "a@example.com",
+                "subject": "One",
+                "body": "body one",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "e2",
+                "from": "b@example.com",
+                "subject": "Two",
+                "body": "body two",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "summarize my emails", "client_session_id": "sess-any-query"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data.get("email_actions")
+    assert len(data["email_actions"]) == 2
+
+
+def test_chat_skips_system_senders_for_reply_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "s1",
+                "from": "mailer-daemon@googlemail.com",
+                "subject": "Bounce",
+                "body": "fail",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "a1",
+                "from": "alice@example.com",
+                "subject": "Hello",
+                "body": "hi",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "show my emails", "client_session_id": "sess-skip-daemon"},
+    )
+    assert r.status_code == 200
+    actions = r.json().get("email_actions") or []
+    assert len(actions) == 1
+    assert "alice" in actions[0]["sender"].lower()
+
+
+def test_chat_skips_system_senders_with_display_name(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "s2",
+                "from": "Mail Delivery <mailer-daemon@x.com>",
+                "subject": "Failed",
+                "body": "bounce",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "b1",
+                "from": "Bob <bob@example.com>",
+                "subject": "Hey",
+                "body": "yo",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "inbox please", "client_session_id": "sess-display-name"},
+    )
+    assert r.status_code == 200
+    actions = r.json().get("email_actions") or []
+    assert len(actions) == 1
+    assert "bob" in actions[0]["sender"].lower()
+
+
+def test_chat_skips_empty_subject_emails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "a1",
+                "from": "alice@example.com",
+                "subject": "",
+                "body": "no subject",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "b1",
+                "from": "bob@example.com",
+                "subject": "Hi",
+                "body": "hello",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "what is in my mail", "client_session_id": "sess-empty-subj"},
+    )
+    assert r.status_code == 200
+    actions = r.json().get("email_actions") or []
+    assert len(actions) == 1
+    assert actions[0]["email_id"] == "b1"
+
+
+def test_chat_caps_reply_actions_at_max(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": str(i),
+                "from": f"u{i}@example.com",
+                "subject": f"Subject {i}",
+                "body": "x",
+                "received_at": "2026-05-04T12:00:00Z",
+            }
+            for i in range(1, 8)
+        ]
+
+    monkeypatch.setenv("REPLY_ACTION_MAX", "3")
     get_settings.cache_clear()
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "list emails", "client_session_id": "sess-cap"},
+    )
+    assert r.status_code == 200
+    assert len(r.json().get("email_actions") or []) == 3
+    get_settings.cache_clear()
+
+
+def test_extract_email_helpers() -> None:
+    from app.routes.chat import _extract_email, _is_system_sender
+
+    assert _extract_email("Name <a@b.c>") == "a@b.c"
+    assert _extract_email("a@b.c") == "a@b.c"
+    assert _extract_email("") == ""
+    assert _is_system_sender("updates@learn.mailgun.com")
+    assert _is_system_sender("notification@priority.facebookmail.com")
+    assert _is_system_sender("notifications-noreply@linkedin.com")
+    assert not _is_system_sender("hr@company.com")
