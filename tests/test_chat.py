@@ -289,9 +289,9 @@ def test_chat_ai_fallback_calendar_proposal_requires_time_and_date(
     )
     assert r.status_code == 200
     data = r.json()
-    assert data["calendar_proposals"] is not None
-    assert len(data["calendar_proposals"]) == 1
-    assert data["calendar_proposals"][0]["confidence"] <= 0.35
+    assert data["response"] == "No meeting-related emails found."
+    assert data.get("calendar_proposals") in (None, [])
+    assert data.get("email_actions") in (None, [])
     get_settings.cache_clear()
 
 
@@ -389,7 +389,9 @@ def test_chat_important_today_fallback_uses_latest_two_when_no_priority(
         json={"query": "any important mail today?", "client_session_id": "sess-reply-fb"},
     )
     assert r.status_code == 200
-    assert len(r.json()["email_actions"]) == 2
+    data = r.json()
+    assert data["response"] == "Not available in current emails."
+    assert data.get("email_actions") in (None, [])
 
 
 def test_chat_reply_draft_and_send_via_gmail_service(
@@ -642,6 +644,80 @@ def test_chat_attaches_reply_actions_for_any_query_with_emails(
     data = r.json()
     assert data.get("email_actions")
     assert len(data["email_actions"]) == 2
+
+
+def test_chat_spam_query_no_match_returns_no_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "m1",
+                "from": "gokulapriyanvcodewonders@gmail.com",
+                "subject": "Meeting mail",
+                "body": "You have meeting today evening at 5 PM",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "m2",
+                "from": "friend@example.com",
+                "subject": "sample",
+                "body": "test mail",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "any spam mails?", "client_session_id": "sess-spam-none"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["response"] == "No spam emails found."
+    assert data.get("email_actions") in (None, [])
+
+
+def test_chat_spam_query_matches_only_spam_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "s1",
+                "from": "updates-noreply@linkedin.com",
+                "subject": "LinkedIn digest",
+                "body": "General update",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "s2",
+                "from": "hello@chess.com",
+                "subject": "Get Premium for Free",
+                "body": "Limited time offer",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+            {
+                "id": "n1",
+                "from": "manager@example.com",
+                "subject": "Project status",
+                "body": "Please send updates",
+                "received_at": "2026-05-04T10:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "spam emails?", "client_session_id": "sess-spam-some"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    actions = data.get("email_actions") or []
+    ids = [a["email_id"] for a in actions]
+    assert ids == ["s1", "s2"]
 
 
 def test_chat_includes_system_senders_with_can_reply_false(

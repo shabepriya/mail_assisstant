@@ -13,9 +13,15 @@ from app.email_client import EmailAPIError, fetch_emails
 from app.filters import (
     extract_sender_query,
     filter_by_sender,
+    filter_important_emails,
+    filter_sales_emails,
+    filter_spam_emails,
     filter_today,
     is_today_intent,
     resolve_query_limit,
+    wants_important_mail_help,
+    wants_sales_mail_help,
+    wants_spam_mail_help,
     wants_meeting_calendar_help,
 )
 from app.google_calendar import GoogleCalendarClient
@@ -558,6 +564,46 @@ async def chat(
                 stale=stale,
             )
 
+    if wants_spam_mail_help(body.query):
+        emails = filter_spam_emails(emails)
+        filtered_count = len(emails)
+        if not emails:
+            return ChatResponse(
+                response="No spam emails found.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=cache_age_s,
+                tokens_used=0,
+                stale=stale,
+            )
+    elif wants_sales_mail_help(body.query):
+        emails = filter_sales_emails(emails)
+        filtered_count = len(emails)
+        if not emails:
+            return ChatResponse(
+                response="Not available in current emails.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=cache_age_s,
+                tokens_used=0,
+                stale=stale,
+            )
+    elif wants_important_mail_help(body.query):
+        emails = filter_important_emails(emails)
+        filtered_count = len(emails)
+        if not emails:
+            return ChatResponse(
+                response="Not available in current emails.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=cache_age_s,
+                tokens_used=0,
+                stale=stale,
+            )
+
     overhead = estimate_overhead_tokens(settings, body.query)
     budget = max(
         500,
@@ -583,14 +629,15 @@ async def chat(
 
     query_limit = resolve_query_limit(body.query, settings.reply_action_max)
     emails = emails[:query_limit]
+    prompt_emails = list(emails)
 
-    priority_count = sum(1 for e in emails if bool(e.get("priority")))
-    non_priority_count = len(emails) - priority_count
+    priority_count = sum(1 for e in prompt_emails if bool(e.get("priority")))
+    non_priority_count = len(prompt_emails) - priority_count
 
     if wants_meeting_calendar_help(body.query):
-        candidates = extract_meeting_proposals_from_emails(emails, settings)
+        candidates = extract_meeting_proposals_from_emails(prompt_emails, settings)
         if not candidates and os.getenv("DEBUG_MEETING_PARSE", "").strip() in {"1", "true", "yes"}:
-            for email in emails:
+            for email in prompt_emails:
                 subject = str(email.get("subject") or "")
                 body = clean_body(
                     truncate_body_raw(str(email.get("body") or ""), settings.max_body_chars),
@@ -656,7 +703,7 @@ async def chat(
             return ChatResponse(
                 response=response_text,
                 request_id=request_id,
-                email_count=len(emails),
+                email_count=len(prompt_emails),
                 filtered_count=filtered_count,
                 cache_age_s=cache_age_s,
                 tokens_used=0,
@@ -666,7 +713,7 @@ async def chat(
                 stale=stale,
             )
 
-    context = emails_to_context(emails, settings.max_body_chars)
+    context = emails_to_context(prompt_emails, settings.max_body_chars)
     overhead = estimate_overhead_tokens(
         settings,
         body.query,
@@ -676,7 +723,7 @@ async def chat(
     )
     tokens_used = count_tokens(context, settings.gemini_model) + overhead
 
-    final_count = len(emails)
+    final_count = len(prompt_emails)
 
     try:
         answer = await ask_ai(
@@ -700,14 +747,14 @@ async def chat(
         ) from None
 
     email_actions_list: list[EmailReplyActionPayload] | None = None
-    if emails:
-        targets = _select_reply_targets(emails, query_limit)
+    if prompt_emails:
+        targets = _select_reply_targets(prompt_emails, query_limit)
         logger.info(
             "reply_actions_attached request_id=%s session_id=%s count=%d total_in_batch=%d",
             request_id,
             session_id,
             len(targets),
-            len(emails),
+            len(prompt_emails),
         )
         payloads_actions: list[EmailReplyActionPayload] = []
         for e in targets:
@@ -751,7 +798,7 @@ async def chat(
         wants_meeting_calendar_help(body.query)
         and settings.calendar_scheduling_enabled
     ):
-        fallback = _build_fallback_from_ai(answer, emails, settings)
+        fallback = _build_fallback_from_ai(answer, prompt_emails, settings)
         if fallback is not None:
             calendar_payloads = [fallback]
             await pending_store.put(

@@ -39,20 +39,107 @@ def wants_important_mail_help(query: str) -> bool:
     return any(h in q for h in hints)
 
 
-def wants_meeting_calendar_help(query: str) -> bool:
+def filter_important_emails(emails: list[dict]) -> list[dict]:
+    return [e for e in emails if bool(e.get("priority"))]
+
+
+def wants_sales_mail_help(query: str) -> bool:
     q = query.lower()
     hints = (
-        "meeting",
-        "calendar",
-        "schedule",
-        "add to calendar",
-        "book this",
-        "tomorrow",
-        "today",
-        "appointment",
-        "call at",
+        "sales",
+        "sale",
+        "promotion",
+        "promotional",
+        "promo",
+        "offer",
+        "discount",
+        "deal",
+        "marketing",
+        "newsletter",
+        "product",
     )
     return any(h in q for h in hints)
+
+
+def filter_sales_emails(emails: list[dict]) -> list[dict]:
+    sales_hints = (
+        "sale",
+        "sales",
+        "promo",
+        "promotion",
+        "offer",
+        "discount",
+        "deal",
+        "coupon",
+        "premium",
+        "free",
+        "trial",
+        "livestream",
+        "launch",
+        "customer engagement",
+        "unsubscribe",
+    )
+    out: list[dict] = []
+    for e in emails:
+        text = f"{e.get('subject', '')}\n{e.get('body', '')}".lower()
+        if any(h in text for h in sales_hints):
+            out.append(e)
+    return out
+
+
+def wants_spam_mail_help(query: str) -> bool:
+    q = query.lower()
+    hints = ("spam", "junk", "phishing", "scam", "unsolicited")
+    return any(h in q for h in hints)
+
+
+def filter_spam_emails(emails: list[dict]) -> list[dict]:
+    spam_hints = (
+        "unsubscribe",
+        "limited time",
+        "act now",
+        "winner",
+        "claim now",
+        "free gift",
+        "exclusive offer",
+        "click here",
+        "buy now",
+        "congratulations",
+        "promo",
+        "promotion",
+        "discount",
+    )
+    sender_hints = ("noreply", "no-reply", "donotreply", "mailer-daemon")
+    out: list[dict] = []
+    for e in emails:
+        sender = str(e.get("from") or e.get("sender") or "").lower()
+        text = f"{e.get('subject', '')}\n{e.get('body', '')}".lower()
+        if any(s in sender for s in sender_hints) or any(h in text for h in spam_hints):
+            out.append(e)
+    return out
+
+
+def wants_meeting_calendar_help(query: str) -> bool:
+    q = query.lower()
+    hard_hints = (
+        "meeting",
+        "calendar",
+        "add to calendar",
+        "appointment",
+        "invite",
+        "invitation",
+        "google meet",
+        "zoom",
+        "teams",
+    )
+    soft_hints = ("schedule", "book this", "call at", "call")
+    if any(h in q for h in hard_hints):
+        return True
+    if "schedule" in q and "call" in q:
+        return True
+    if any(h in q for h in soft_hints) and any(t in q for t in ("today", "tomorrow", "am", "pm")):
+        return True
+    return False
 
 
 _QUERY_LIMIT_NUM = re.compile(

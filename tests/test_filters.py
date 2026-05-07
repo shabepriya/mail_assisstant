@@ -1,10 +1,14 @@
 from app.filters import (
     extract_sender_query,
     filter_by_sender,
+    filter_sales_emails,
+    filter_spam_emails,
     is_today_intent,
     resolve_query_limit,
     wants_important_mail_help,
     wants_meeting_calendar_help,
+    wants_sales_mail_help,
+    wants_spam_mail_help,
 )
 
 
@@ -56,6 +60,37 @@ def test_wants_important_mail_help() -> None:
     assert wants_important_mail_help("priority emails today") is True
     assert wants_important_mail_help("priority emails") is True
     assert wants_important_mail_help("summarize inbox") is False
+
+
+def test_wants_sales_mail_help() -> None:
+    assert wants_sales_mail_help("any sales mail?") is True
+    assert wants_sales_mail_help("show promotional offers") is True
+    assert wants_sales_mail_help("summarize inbox") is False
+
+
+def test_wants_spam_mail_help() -> None:
+    assert wants_spam_mail_help("any spam mails?") is True
+    assert wants_spam_mail_help("check junk folder style emails") is True
+    assert wants_spam_mail_help("summarize inbox") is False
+
+
+def test_filter_sales_emails_matches_promotional_content() -> None:
+    emails = [
+        {"id": "1", "subject": "Get 1 Month Premium for Free", "body": "Offer ends soon"},
+        {"id": "2", "subject": "Project update", "body": "Internal status note"},
+    ]
+    out = filter_sales_emails(emails)
+    assert [e["id"] for e in out] == ["1"]
+
+
+def test_filter_spam_emails_matches_sender_or_body_hints() -> None:
+    emails = [
+        {"id": "1", "from": "updates-noreply@x.com", "subject": "Hi", "body": "General update"},
+        {"id": "2", "from": "user@example.com", "subject": "Alert", "body": "Limited time offer"},
+        {"id": "3", "from": "boss@example.com", "subject": "Meeting", "body": "Please join"},
+    ]
+    out = filter_spam_emails(emails)
+    assert [e["id"] for e in out] == ["1", "2"]
 
 
 def test_resolve_query_limit_singular_cue_returns_one() -> None:
