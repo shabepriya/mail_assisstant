@@ -603,6 +603,16 @@ async def chat(
                     subject,
                     f"{subject}\n{body}"[:2000],
                 )
+        if not candidates:
+            return ChatResponse(
+                response="No meeting-related emails found.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=cache_age_s,
+                tokens_used=0,
+                stale=stale,
+            )
         if candidates:
             payloads: list[CalendarProposalPayload] = []
             for c in candidates:
