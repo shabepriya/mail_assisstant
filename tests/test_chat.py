@@ -33,7 +33,6 @@ def test_chat_ok(client: TestClient, patch_ask_ai: None) -> None:
     assert r.status_code == 200
     data = r.json()
     assert data["response"].startswith("mocked-ai-response")
-    assert "Use the Reply buttons below" in data["response"]
     assert "request_id" in data
     assert "cache_age_s" in data
     assert "email_count" in data
@@ -46,7 +45,6 @@ def test_chat_not_available_sentence(client: TestClient, patch_ask_ai: None) -> 
     assert r.status_code == 200
     body = r.json()["response"]
     assert body.startswith("Not available in current emails.")
-    assert "Use the Reply buttons below" in body
 
 
 def test_chat_sender_filter_no_match(client: TestClient, patch_ask_ai: None) -> None:
@@ -66,7 +64,6 @@ def test_chat_sender_filter_match(client: TestClient, patch_ask_ai: None) -> Non
     assert r.status_code == 200
     body = r.json()["response"]
     assert body.startswith("mocked-ai-response")
-    assert "Use the Reply buttons below" in body
 
 
 def test_chat_returns_empty_batch_message(
@@ -647,7 +644,7 @@ def test_chat_attaches_reply_actions_for_any_query_with_emails(
     assert len(data["email_actions"]) == 2
 
 
-def test_chat_skips_system_senders_for_reply_actions(
+def test_chat_includes_system_senders_with_can_reply_false(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
 ) -> None:
     async def _emails(*_a, **_k):
@@ -676,11 +673,15 @@ def test_chat_skips_system_senders_for_reply_actions(
     )
     assert r.status_code == 200
     actions = r.json().get("email_actions") or []
-    assert len(actions) == 1
-    assert "alice" in actions[0]["sender"].lower()
+    assert len(actions) == 2
+    assert actions[0]["email_id"] == "s1"
+    assert actions[0]["can_reply"] is False
+    assert actions[1]["email_id"] == "a1"
+    assert actions[1]["can_reply"] is True
+    assert "alice" in actions[1]["sender"].lower()
 
 
-def test_chat_skips_system_senders_with_display_name(
+def test_chat_includes_system_senders_with_display_name_can_reply_false(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
 ) -> None:
     async def _emails(*_a, **_k):
@@ -709,11 +710,15 @@ def test_chat_skips_system_senders_with_display_name(
     )
     assert r.status_code == 200
     actions = r.json().get("email_actions") or []
-    assert len(actions) == 1
-    assert "bob" in actions[0]["sender"].lower()
+    assert len(actions) == 2
+    assert actions[0]["email_id"] == "s2"
+    assert actions[0]["can_reply"] is False
+    assert actions[1]["email_id"] == "b1"
+    assert actions[1]["can_reply"] is True
+    assert "bob" in actions[1]["sender"].lower()
 
 
-def test_chat_skips_empty_subject_emails(
+def test_chat_includes_empty_subject_in_reply_actions(
     client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
 ) -> None:
     async def _emails(*_a, **_k):
@@ -742,8 +747,12 @@ def test_chat_skips_empty_subject_emails(
     )
     assert r.status_code == 200
     actions = r.json().get("email_actions") or []
-    assert len(actions) == 1
-    assert actions[0]["email_id"] == "b1"
+    assert len(actions) == 2
+    assert actions[0]["email_id"] == "a1"
+    assert actions[0]["subject"] == "(no subject)"
+    assert actions[0]["can_reply"] is True
+    assert actions[1]["email_id"] == "b1"
+    assert actions[1]["can_reply"] is True
 
 
 def test_chat_caps_reply_actions_at_max(
@@ -784,3 +793,86 @@ def test_extract_email_helpers() -> None:
     assert _is_system_sender("notification@priority.facebookmail.com")
     assert _is_system_sender("notifications-noreply@linkedin.com")
     assert not _is_system_sender("hr@company.com")
+
+
+def test_chat_open_action_returns_view_and_composer(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "e1",
+                "from": "hr@company.com",
+                "subject": "Interview",
+                "body": "Hello there",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    first = client.post(
+        "/ai/chat",
+        json={"query": "summarize my emails", "client_session_id": "sess-open-view"},
+    ).json()
+    aid = first["email_actions"][0]["action_id"]
+
+    async def _mock_draft(
+        settings,
+        *,
+        from_addr: str,
+        subject: str,
+        body_plain: str,
+    ) -> str:
+        return "Mock draft"
+
+    monkeypatch.setattr("app.routes.chat.generate_reply_draft", _mock_draft)
+
+    r = client.post(
+        "/ai/chat",
+        json={
+            "query": "",
+            "client_session_id": "sess-open-view",
+            "email_reply_action": "open",
+            "email_reply_action_id": aid,
+        },
+    )
+    assert r.status_code == 200
+    d = r.json()
+    assert d.get("email_open_view")
+    assert d["email_open_view"]["email_id"] == "e1"
+    assert d["email_open_view"]["from_addr"] == "hr@company.com"
+    assert d["email_open_view"]["subject"] == "Interview"
+    assert "Hello" in d["email_open_view"]["body"]
+    assert d.get("reply_composer")
+    assert d["reply_composer"]["body"] == "Mock draft"
+    assert d["reply_composer"]["subject"].lower().startswith("re:")
+
+
+def test_chat_open_action_missing_snapshot(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    r = client.post(
+        "/ai/chat",
+        json={
+            "query": "",
+            "client_session_id": "sess-open-miss",
+            "email_reply_action": "open",
+            "email_reply_action_id": "reply_nonexistent999",
+        },
+    )
+    assert r.status_code == 200
+    assert "no longer available" in r.json()["response"].lower()
+
+
+def test_chat_open_action_missing_id(client: TestClient) -> None:
+    r = client.post(
+        "/ai/chat",
+        json={
+            "query": "",
+            "client_session_id": "sess-open-noid",
+            "email_reply_action": "open",
+        },
+    )
+    assert r.status_code == 200
+    assert "Missing reply action id" in r.json()["response"]

@@ -173,6 +173,45 @@
       color: var(--muted);
       margin: 0;
     }
+
+    .open-mail {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 10px;
+      margin-top: 8px;
+      background: var(--panel-2);
+    }
+
+    .open-mail-line {
+      font-size: 13px;
+      margin-bottom: 4px;
+    }
+
+    .open-mail-body {
+      font-size: 13px;
+      white-space: pre-wrap;
+      margin: 8px 0 0;
+      max-height: 280px;
+      overflow: auto;
+      font-family: inherit;
+    }
+
+    .reply-actions .open-btn {
+      background: #3b82f6;
+      border-color: #2563eb;
+      color: #fff;
+    }
+
+    .reply-actions .open-btn:hover {
+      filter: brightness(1.08);
+    }
+
+    .reply-actions .row-btns {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      margin-top: 6px;
+    }
   </style>
 </head>
 
@@ -371,6 +410,137 @@
       actionsEl.appendChild(wrap);
     }
 
+    function escapeHtml(s) {
+      const d = document.createElement("div");
+      d.textContent = s == null ? "" : String(s);
+      return d.innerHTML;
+    }
+
+    function extractEmail(s) {
+      if (!s) return "";
+      const m = String(s).match(/<([^>]+)>/);
+      return (m ? m[1] : String(s)).trim();
+    }
+
+    function openGmailCompose(toRaw, subjectRaw) {
+      const to = extractEmail(toRaw);
+      const subject = "Re: " + (subjectRaw || "");
+      const body =
+        "Hi,\n\n" +
+        'Thanks for your email regarding "' + (subjectRaw || "") + '".\n\n' +
+        "Best regards,\n";
+      const url =
+        "https://mail.google.com/mail/?view=cm&fs=1" +
+        "&to=" + encodeURIComponent(to) +
+        "&su=" + encodeURIComponent(subject) +
+        "&body=" + encodeURIComponent(body);
+      window.open(url, "_blank", "noopener");
+    }
+
+    function openGmailMessage(messageId) {
+      if (!messageId) {
+        alert("This email cannot be opened directly.");
+        return;
+      }
+      window.open(
+        "https://mail.google.com/mail/u/0/#all/" + encodeURIComponent(messageId),
+        "_blank",
+        "noopener"
+      );
+    }
+
+    function renderComposer(hostEl, c) {
+      const box = document.createElement("div");
+      box.style.border = "1px solid var(--border)";
+      box.style.borderRadius = "10px";
+      box.style.padding = "10px";
+      box.style.marginTop = "8px";
+      box.style.background = "var(--panel-2)";
+      const cap = document.createElement("div");
+      cap.style.fontSize = "12px";
+      cap.style.color = "var(--muted)";
+      cap.style.marginBottom = "6px";
+      cap.textContent = "AI draft (editable)";
+      box.appendChild(cap);
+      const mkLabel = (t) => {
+        const el = document.createElement("label");
+        el.textContent = t;
+        el.style.display = "block";
+        el.style.fontSize = "12px";
+        el.style.marginTop = "6px";
+        return el;
+      };
+      const toIn = document.createElement("input");
+      toIn.type = "text";
+      toIn.value = c.to || "";
+      toIn.style.width = "100%";
+      toIn.style.marginTop = "4px";
+      box.appendChild(mkLabel("To"));
+      box.appendChild(toIn);
+      const subIn = document.createElement("input");
+      subIn.type = "text";
+      subIn.value = c.subject || "";
+      subIn.style.width = "100%";
+      subIn.style.marginTop = "4px";
+      box.appendChild(mkLabel("Subject"));
+      box.appendChild(subIn);
+      const bodyTa = document.createElement("textarea");
+      bodyTa.value = c.body || "";
+      bodyTa.rows = 8;
+      bodyTa.style.width = "100%";
+      bodyTa.style.marginTop = "4px";
+      bodyTa.style.fontFamily = "inherit";
+      box.appendChild(mkLabel("Body"));
+      box.appendChild(bodyTa);
+      const rowBtn = document.createElement("div");
+      rowBtn.style.display = "flex";
+      rowBtn.style.gap = "8px";
+      rowBtn.style.marginTop = "10px";
+      const sendBtn = document.createElement("button");
+      sendBtn.textContent = "Send";
+      sendBtn.className = "primary";
+      sendBtn.onclick = async () => {
+        sendBtn.disabled = true;
+        try {
+          const res2 = await fetch("/ai/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              query: "",
+              force_refresh: false,
+              client_session_id: clientSessionId,
+              email_reply_action: "send",
+              email_reply_action_id: c.action_id,
+              reply_to: toIn.value.trim(),
+              reply_subject: subIn.value.trim(),
+              reply_body: bodyTa.value,
+            }),
+          });
+          const d2 = await res2.json().catch(() => ({}));
+          if (!res2.ok) {
+            alert((d2.error || d2.detail || res2.statusText) + "");
+            sendBtn.disabled = false;
+            return;
+          }
+          hostEl.innerHTML = "";
+          const done = document.createElement("div");
+          done.style.fontSize = "13px";
+          done.textContent = d2.response || "Done.";
+          hostEl.appendChild(done);
+        } catch (err) {
+          alert("Network error: " + err);
+          sendBtn.disabled = false;
+        }
+      };
+      const cancelBtn = document.createElement("button");
+      cancelBtn.textContent = "Cancel";
+      cancelBtn.onclick = () => { hostEl.innerHTML = ""; };
+      rowBtn.appendChild(sendBtn);
+      rowBtn.appendChild(cancelBtn);
+      box.appendChild(rowBtn);
+      hostEl.appendChild(box);
+    }
+
     function renderEmailReplyActions(targetEl, actions) {
       const { replyEl } = ensureAssistantStructure(targetEl);
       replyEl.innerHTML = "";
@@ -379,14 +549,6 @@
       wrap.style.display = "flex";
       wrap.style.flexDirection = "column";
       wrap.style.gap = "8px";
-      const title = document.createElement("div");
-      title.style.fontSize = "12px";
-      title.style.color = "var(--muted)";
-      title.textContent = "Reply actions";
-      wrap.appendChild(title);
-      const composerHost = document.createElement("div");
-      composerHost.className = "reply-composer-host";
-      wrap.appendChild(composerHost);
 
       actions.forEach((a) => {
         const row = document.createElement("div");
@@ -405,10 +567,28 @@
         prev.style.marginBottom = "8px";
         prev.textContent = a.preview || "";
         row.appendChild(prev);
-        const btn = document.createElement("button");
-        btn.textContent = "Reply";
-        btn.onclick = () => openReplyDraft(composerHost, a.action_id);
-        row.appendChild(btn);
+        const rowBtns = document.createElement("div");
+        rowBtns.className = "row-btns";
+        const openBtn = document.createElement("button");
+        openBtn.type = "button";
+        openBtn.textContent = "Open";
+        openBtn.className = "open-btn";
+        openBtn.disabled = !a.email_id;
+        openBtn.title = a.email_id ? "Open in Gmail" : "No message id";
+        openBtn.onclick = () => openGmailMessage(a.email_id);
+        const replyBtn = document.createElement("button");
+        replyBtn.type = "button";
+        replyBtn.textContent = "Reply";
+        replyBtn.title = "Reply in Gmail";
+        replyBtn.onclick = () =>
+          openGmailCompose(a.sender_email || a.sender, a.subject || "");
+        if (a.can_reply === false) {
+          replyBtn.disabled = true;
+          replyBtn.title = "Cannot reply to this automated sender";
+        }
+        rowBtns.appendChild(openBtn);
+        rowBtns.appendChild(replyBtn);
+        row.appendChild(rowBtns);
         wrap.appendChild(row);
       });
       replyEl.appendChild(wrap);
@@ -448,95 +628,70 @@
           hostEl.textContent = data.response || "No draft returned.";
           return;
         }
-        const box = document.createElement("div");
-        box.style.border = "1px solid var(--border)";
-        box.style.borderRadius = "10px";
-        box.style.padding = "10px";
-        box.style.marginTop = "8px";
-        box.style.background = "var(--panel-2)";
-        const cap = document.createElement("div");
-        cap.style.fontSize = "12px";
-        cap.style.color = "var(--muted)";
-        cap.style.marginBottom = "6px";
-        cap.textContent = "AI draft (editable)";
-        box.appendChild(cap);
-        const mkLabel = (t) => {
-          const el = document.createElement("label");
-          el.textContent = t;
-          el.style.display = "block";
-          el.style.fontSize = "12px";
-          el.style.marginTop = "6px";
-          return el;
-        };
-        const toIn = document.createElement("input");
-        toIn.type = "text";
-        toIn.value = c.to || "";
-        toIn.style.width = "100%";
-        toIn.style.marginTop = "4px";
-        box.appendChild(mkLabel("To"));
-        box.appendChild(toIn);
-        const subIn = document.createElement("input");
-        subIn.type = "text";
-        subIn.value = c.subject || "";
-        subIn.style.width = "100%";
-        subIn.style.marginTop = "4px";
-        box.appendChild(mkLabel("Subject"));
-        box.appendChild(subIn);
-        const bodyTa = document.createElement("textarea");
-        bodyTa.value = c.body || "";
-        bodyTa.rows = 8;
-        bodyTa.style.width = "100%";
-        bodyTa.style.marginTop = "4px";
-        bodyTa.style.fontFamily = "inherit";
-        box.appendChild(mkLabel("Body"));
-        box.appendChild(bodyTa);
-        const rowBtn = document.createElement("div");
-        rowBtn.style.display = "flex";
-        rowBtn.style.gap = "8px";
-        rowBtn.style.marginTop = "10px";
-        const sendBtn = document.createElement("button");
-        sendBtn.textContent = "Send";
-        sendBtn.className = "primary";
-        sendBtn.onclick = async () => {
-          sendBtn.disabled = true;
-          try {
-            const res2 = await fetch("/ai/chat", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                query: "",
-                force_refresh: false,
-                client_session_id: clientSessionId,
-                email_reply_action: "send",
-                email_reply_action_id: c.action_id,
-                reply_to: toIn.value.trim(),
-                reply_subject: subIn.value.trim(),
-                reply_body: bodyTa.value,
-              }),
-            });
-            const d2 = await res2.json().catch(() => ({}));
-            if (!res2.ok) {
-              alert((d2.error || d2.detail || res2.statusText) + "");
-              sendBtn.disabled = false;
-              return;
-            }
-            hostEl.innerHTML = "";
-            const done = document.createElement("div");
-            done.style.fontSize = "13px";
-            done.textContent = d2.response || "Done.";
-            hostEl.appendChild(done);
-          } catch (err) {
-            alert("Network error: " + err);
-            sendBtn.disabled = false;
-          }
-        };
-        const cancelBtn = document.createElement("button");
-        cancelBtn.textContent = "Cancel";
-        cancelBtn.onclick = () => { hostEl.innerHTML = ""; };
-        rowBtn.appendChild(sendBtn);
-        rowBtn.appendChild(cancelBtn);
-        box.appendChild(rowBtn);
-        hostEl.appendChild(box);
+        renderComposer(hostEl, c);
+      } catch (e) {
+        hostEl.innerHTML = "";
+        hostEl.textContent = "Network error: " + e;
+      } finally {
+        send.disabled = false;
+        refresh.disabled = false;
+        clear.disabled = false;
+      }
+    }
+
+    async function openEmailView(hostEl, actionId) {
+      hostEl.innerHTML = "";
+      const loading = document.createElement("div");
+      loading.style.fontSize = "13px";
+      loading.style.marginTop = "6px";
+      loading.textContent = "Loading…";
+      hostEl.appendChild(loading);
+      send.disabled = true;
+      refresh.disabled = true;
+      clear.disabled = true;
+      try {
+        const res = await fetch("/ai/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            query: "",
+            force_refresh: false,
+            client_session_id: clientSessionId,
+            email_reply_action: "open",
+            email_reply_action_id: actionId,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        hostEl.innerHTML = "";
+        if (!res.ok) {
+          hostEl.textContent = (data.error || data.detail || res.statusText) +
+            (data.request_id ? "\nrequest_id: " + data.request_id : "");
+          return;
+        }
+        const v = data.email_open_view;
+        if (v) {
+          const card = document.createElement("div");
+          card.className = "open-mail";
+          const fromLine = document.createElement("div");
+          fromLine.className = "open-mail-line";
+          fromLine.innerHTML = "<b>From:</b> " + escapeHtml(v.from_addr);
+          const subLine = document.createElement("div");
+          subLine.className = "open-mail-line";
+          subLine.innerHTML = "<b>Subject:</b> " + escapeHtml(v.subject);
+          const pre = document.createElement("pre");
+          pre.className = "open-mail-body";
+          pre.textContent = v.body || "";
+          card.appendChild(fromLine);
+          card.appendChild(subLine);
+          card.appendChild(pre);
+          hostEl.appendChild(card);
+        }
+        const c = data.reply_composer;
+        if (!c) {
+          if (!v) hostEl.textContent = data.response || "No content returned.";
+          return;
+        }
+        renderComposer(hostEl, c);
       } catch (e) {
         hostEl.innerHTML = "";
         hostEl.textContent = "Network error: " + e;

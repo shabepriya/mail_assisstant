@@ -28,6 +28,7 @@ from app.models import (
     CalendarProposalPayload,
     ChatRequest,
     ChatResponse,
+    EmailOpenView,
     EmailReplyActionPayload,
     ReplyComposerPayload,
 )
@@ -177,18 +178,8 @@ def _is_system_sender(addr: str) -> bool:
 
 
 def _select_reply_targets(emails: list[dict], limit: int) -> list[dict]:
-    out: list[dict] = []
-    for e in emails:
-        if not str(e.get("id", "")).strip():
-            continue
-        if not str(e.get("subject", "")).strip():
-            continue
-        if _is_system_sender(str(e.get("from", ""))):
-            continue
-        out.append(e)
-        if len(out) >= limit:
-            break
-    return out
+    """First ``limit`` emails in the same order as the AI context (no filtering)."""
+    return list(emails[:limit])
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -254,6 +245,64 @@ async def chat(
             filtered_count=0,
             cache_age_s=0.0,
             tokens_used=0,
+            reply_composer=composer,
+        )
+
+    if body.email_reply_action == "open":
+        if not body.email_reply_action_id:
+            return ChatResponse(
+                response="Missing reply action id.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        snap = await reply_store.get(session_id, body.email_reply_action_id)
+        if not snap:
+            return ChatResponse(
+                response="That email is no longer available. Please ask again.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=0.0,
+                tokens_used=0,
+            )
+        try:
+            draft_body = await generate_reply_draft(
+                settings,
+                from_addr=snap.from_addr,
+                subject=snap.subject,
+                body_plain=snap.body_plain,
+            )
+        except Exception:
+            logger.exception("open_view_draft_failed request_id=%s", request_id)
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail={
+                    "error": "AI service temporarily unavailable.",
+                    "request_id": request_id,
+                },
+            ) from None
+        composer = ReplyComposerPayload(
+            action_id=snap.action_id,
+            to=snap.from_addr,
+            subject=_reply_subject_line(snap.subject),
+            body=draft_body,
+        )
+        return ChatResponse(
+            response="Opened email with editable reply.",
+            request_id=request_id,
+            email_count=0,
+            filtered_count=0,
+            cache_age_s=0.0,
+            tokens_used=0,
+            email_open_view=EmailOpenView(
+                email_id=snap.email_id,
+                from_addr=snap.from_addr,
+                subject=snap.subject,
+                body=snap.body_plain,
+            ),
             reply_composer=composer,
         )
 
@@ -678,14 +727,10 @@ async def chat(
                     sender_email=from_addr if "@" in from_addr else None,
                     subject=subj,
                     preview=preview or "(no preview)",
+                    can_reply=not _is_system_sender(str(e.get("from", ""))),
                 )
             )
         email_actions_list = payloads_actions
-        if email_actions_list:
-            answer = (
-                answer
-                + "\n\nUse the Reply buttons below to respond to any of these emails."
-            )
 
     calendar_payloads: list[CalendarProposalPayload] | None = None
     if (

@@ -9,7 +9,7 @@ class ChatRequest(BaseModel):
     client_session_id: str | None = Field(default=None, max_length=128)
     calendar_action: Literal["none", "approve", "dismiss"] | None = None
     calendar_proposal_id: str | None = Field(default=None, max_length=128)
-    email_reply_action: Literal["draft", "send"] | None = None
+    email_reply_action: Literal["draft", "send", "open"] | None = None
     email_reply_action_id: str | None = Field(default=None, max_length=128)
     reply_to: str | None = Field(default=None, max_length=320)
     reply_subject: str | None = Field(default=None, max_length=500)
@@ -42,12 +42,20 @@ class EmailReplyActionPayload(BaseModel):
     sender_email: str | None = None
     subject: str
     preview: str
+    can_reply: bool = True
     action_type: Literal["reply"] = "reply"
 
 
 class ReplyComposerPayload(BaseModel):
     action_id: str
     to: str
+    subject: str
+    body: str
+
+
+class EmailOpenView(BaseModel):
+    email_id: str
+    from_addr: str
     subject: str
     body: str
 
@@ -64,6 +72,7 @@ class ChatResponse(BaseModel):
     calendar_proposals: list[CalendarProposalPayload] | None = None
     email_actions: list[EmailReplyActionPayload] | None = None
     reply_composer: ReplyComposerPayload | None = None
+    email_open_view: EmailOpenView | None = None
     stale: bool = False
 
 
