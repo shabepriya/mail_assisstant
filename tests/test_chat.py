@@ -783,6 +783,67 @@ def test_chat_caps_reply_actions_at_max(
     get_settings.cache_clear()
 
 
+def test_chat_query_last_mail_returns_one_action(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": str(i),
+                "from": f"u{i}@example.com",
+                "subject": f"S{i}",
+                "body": "x",
+                "received_at": "2026-05-04T12:00:00Z",
+            }
+            for i in range(1, 6)
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={
+            "query": "what is my last mail",
+            "client_session_id": "sess-last-one",
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["email_actions"]) == 1
+    assert data["email_actions"][0]["email_id"] == "1"
+    assert data["email_count"] == 1
+
+
+def test_chat_query_summarize_last_5_returns_five(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": str(i),
+                "from": f"u{i}@example.com",
+                "subject": f"S{i}",
+                "body": "x",
+                "received_at": "2026-05-04T12:00:00Z",
+            }
+            for i in range(1, 8)
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={
+            "query": "summarize last 5 mails",
+            "client_session_id": "sess-last-five",
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["email_actions"]) == 5
+    assert data["email_count"] == 5
+
+
 def test_extract_email_helpers() -> None:
     from app.routes.chat import _extract_email, _is_system_sender
 

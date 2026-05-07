@@ -55,6 +55,57 @@ def wants_meeting_calendar_help(query: str) -> bool:
     return any(h in q for h in hints)
 
 
+_QUERY_LIMIT_NUM = re.compile(
+    r"\b(?:last|latest|first|top|recent|previous|past|summarize|summarise|show|list|give\s+me|read)\s+(\d+)\b"
+)
+_QUERY_LIMIT_NUM_TRAILING = re.compile(r"\b(\d+)\s+(?:mails?|emails?|messages?)\b")
+_QUERY_SINGULAR_CUES = (
+    "last mail",
+    "last email",
+    "last message",
+    "latest mail",
+    "latest email",
+    "latest message",
+    "most recent mail",
+    "most recent email",
+    "most recent message",
+    "recent mail",
+    "recent email",
+    "recent message",
+    "first mail",
+    "first email",
+    "first message",
+    "top mail",
+    "top email",
+    "top message",
+    "previous mail",
+    "previous email",
+    "previous message",
+    "the latest",
+    "my last",
+    "my latest",
+)
+
+
+def resolve_query_limit(query: str, default: int) -> int:
+    """How many emails to include in context and reply actions for this query."""
+    q = (query or "").lower().strip()
+    if not q:
+        return default
+    for rx in (_QUERY_LIMIT_NUM, _QUERY_LIMIT_NUM_TRAILING):
+        m = rx.search(q)
+        if m:
+            try:
+                n = int(m.group(1))
+            except ValueError:
+                continue
+            if n >= 1:
+                return min(n, default)
+    if any(cue in q for cue in _QUERY_SINGULAR_CUES):
+        return 1
+    return default
+
+
 def extract_sender_query(query: str) -> str | None:
     """Return the token after 'from ' if present (e.g. sundar, sundar@gmail.com)."""
     match = re.search(r"from\s+(\S+)", query.lower())

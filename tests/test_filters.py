@@ -2,6 +2,7 @@ from app.filters import (
     extract_sender_query,
     filter_by_sender,
     is_today_intent,
+    resolve_query_limit,
     wants_important_mail_help,
     wants_meeting_calendar_help,
 )
@@ -55,3 +56,25 @@ def test_wants_important_mail_help() -> None:
     assert wants_important_mail_help("priority emails today") is True
     assert wants_important_mail_help("priority emails") is True
     assert wants_important_mail_help("summarize inbox") is False
+
+
+def test_resolve_query_limit_singular_cue_returns_one() -> None:
+    assert resolve_query_limit("what is my last mail", 5) == 1
+    assert resolve_query_limit("show me the latest email", 5) == 1
+    assert resolve_query_limit("most recent message", 5) == 1
+
+
+def test_resolve_query_limit_numeric() -> None:
+    assert resolve_query_limit("summarize last 5 mails", 5) == 5
+    assert resolve_query_limit("show me top 3 emails", 5) == 3
+    assert resolve_query_limit("read recent 2 messages", 5) == 2
+
+
+def test_resolve_query_limit_caps_at_default() -> None:
+    assert resolve_query_limit("summarize last 50 mails", 5) == 5
+
+
+def test_resolve_query_limit_default_when_no_cue() -> None:
+    assert resolve_query_limit("any important mail?", 5) == 5
+    assert resolve_query_limit("what is in my mail", 5) == 5
+    assert resolve_query_limit("", 5) == 5

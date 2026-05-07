@@ -15,6 +15,7 @@ from app.filters import (
     filter_by_sender,
     filter_today,
     is_today_intent,
+    resolve_query_limit,
     wants_meeting_calendar_help,
 )
 from app.google_calendar import GoogleCalendarClient
@@ -580,6 +581,9 @@ async def chat(
             stale=stale,
         )
 
+    query_limit = resolve_query_limit(body.query, settings.reply_action_max)
+    emails = emails[:query_limit]
+
     priority_count = sum(1 for e in emails if bool(e.get("priority")))
     non_priority_count = len(emails) - priority_count
 
@@ -687,7 +691,7 @@ async def chat(
 
     email_actions_list: list[EmailReplyActionPayload] | None = None
     if emails:
-        targets = _select_reply_targets(emails, settings.reply_action_max)
+        targets = _select_reply_targets(emails, query_limit)
         logger.info(
             "reply_actions_attached request_id=%s session_id=%s count=%d total_in_batch=%d",
             request_id,
