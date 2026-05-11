@@ -358,6 +358,8 @@ def test_chat_important_today_returns_email_actions(
     data = r.json()
     assert data.get("email_actions")
     assert 1 <= len(data["email_actions"]) <= 2
+    action_ids = {a["email_id"] for a in data["email_actions"]}
+    assert action_ids == {"r1"}
 
 
 def test_chat_important_today_fallback_uses_latest_two_when_no_priority(
@@ -718,6 +720,179 @@ def test_chat_spam_query_matches_only_spam_actions(
     actions = data.get("email_actions") or []
     ids = [a["email_id"] for a in actions]
     assert ids == ["s1", "s2"]
+
+
+def test_chat_sales_query_no_match_returns_specific_message_and_no_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "x1",
+                "from": "manager@example.com",
+                "subject": "Project update",
+                "body": "Status and blockers.",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "x2",
+                "from": "friend@example.com",
+                "subject": "Weekend plan",
+                "body": "Let's catch up.",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "any sales mail?", "client_session_id": "sess-sales-none"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["response"] == "No sales emails found."
+    assert data.get("email_actions") in (None, [])
+
+
+def test_chat_order_query_no_match_returns_no_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "u1",
+                "from": "friend@example.com",
+                "subject": "Catch up",
+                "body": "How are you?",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "u2",
+                "from": "updates-noreply@linkedin.com",
+                "subject": "LinkedIn digest",
+                "body": "General updates",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "any order related mail?", "client_session_id": "sess-order-none"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["response"] == "Not available in current emails."
+    assert data.get("email_actions") in (None, [])
+
+
+def test_chat_order_query_matches_only_order_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "o1",
+                "from": "store@example.com",
+                "subject": "Order shipped",
+                "body": "Tracking number enclosed.",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+            {
+                "id": "o2",
+                "from": "billing@example.com",
+                "subject": "Invoice for your purchase",
+                "body": "Payment successful.",
+                "received_at": "2026-05-04T11:30:00Z",
+            },
+            {
+                "id": "n1",
+                "from": "teamtwilio@team.twilio.com",
+                "subject": "LIVE: AI launch",
+                "body": "Join livestream now.",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "show product order emails", "client_session_id": "sess-order-match"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    actions = data.get("email_actions") or []
+    ids = [a["email_id"] for a in actions]
+    assert ids == ["o1", "o2"]
+
+
+def test_chat_emergency_query_no_match_returns_no_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, patch_ask_ai: None
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "n1",
+                "from": "teamtwilio@team.twilio.com",
+                "subject": "LIVE: AI launch",
+                "body": "Join livestream now.",
+                "received_at": "2026-05-04T11:00:00Z",
+            },
+        ]
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "any emergency related mail?", "client_session_id": "sess-emergency-none"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["response"] == "Not available in current emails."
+    assert data.get("email_actions") in (None, [])
+
+
+def test_chat_important_ai_no_match_answer_suppresses_actions(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def _emails(*_a, **_k):
+        return [
+            {
+                "id": "p1",
+                "from": "security@example.com",
+                "subject": "Urgent security alert",
+                "body": "Please rotate your password now.",
+                "received_at": "2026-05-04T12:00:00Z",
+            },
+        ]
+
+    async def _force_no_match(
+        settings,
+        *,
+        context: str,
+        query: str,
+        email_count: int,
+        priority_count: int | None = None,
+        non_priority_count: int | None = None,
+        include_calendar_confirmation_guidance: bool = False,
+    ) -> str:
+        return "Not available in current emails."
+
+    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.routes.chat.ask_ai", _force_no_match)
+
+    r = client.post(
+        "/ai/chat",
+        json={"query": "any emergency related mail?", "client_session_id": "sess-emergency-guard"},
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["response"] == "Not available in current emails."
+    assert data.get("email_actions") in (None, [])
+    assert data["email_count"] == 0
 
 
 def test_chat_includes_system_senders_with_can_reply_false(

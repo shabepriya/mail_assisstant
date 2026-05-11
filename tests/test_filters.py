@@ -1,12 +1,14 @@
 from app.filters import (
     extract_sender_query,
     filter_by_sender,
+    filter_order_emails,
     filter_sales_emails,
     filter_spam_emails,
     is_today_intent,
     resolve_query_limit,
     wants_important_mail_help,
     wants_meeting_calendar_help,
+    wants_order_mail_help,
     wants_sales_mail_help,
     wants_spam_mail_help,
 )
@@ -59,6 +61,7 @@ def test_wants_important_mail_help() -> None:
     assert wants_important_mail_help("any important mail today?") is True
     assert wants_important_mail_help("priority emails today") is True
     assert wants_important_mail_help("priority emails") is True
+    assert wants_important_mail_help("any emergency mail?") is True
     assert wants_important_mail_help("summarize inbox") is False
 
 
@@ -66,6 +69,12 @@ def test_wants_sales_mail_help() -> None:
     assert wants_sales_mail_help("any sales mail?") is True
     assert wants_sales_mail_help("show promotional offers") is True
     assert wants_sales_mail_help("summarize inbox") is False
+
+
+def test_wants_order_mail_help() -> None:
+    assert wants_order_mail_help("any order related mail?") is True
+    assert wants_order_mail_help("show product updates") is True
+    assert wants_order_mail_help("summarize inbox") is False
 
 
 def test_wants_spam_mail_help() -> None:
@@ -80,6 +89,15 @@ def test_filter_sales_emails_matches_promotional_content() -> None:
         {"id": "2", "subject": "Project update", "body": "Internal status note"},
     ]
     out = filter_sales_emails(emails)
+    assert [e["id"] for e in out] == ["1"]
+
+
+def test_filter_order_emails_matches_order_signals() -> None:
+    emails = [
+        {"id": "1", "subject": "Order shipped", "body": "Tracking id available"},
+        {"id": "2", "subject": "Weekly digest", "body": "Top stories"},
+    ]
+    out = filter_order_emails(emails)
     assert [e["id"] for e in out] == ["1"]
 
 

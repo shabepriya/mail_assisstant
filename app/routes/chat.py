@@ -14,6 +14,7 @@ from app.filters import (
     extract_sender_query,
     filter_by_sender,
     filter_important_emails,
+    filter_order_emails,
     filter_sales_emails,
     filter_spam_emails,
     filter_today,
@@ -22,6 +23,7 @@ from app.filters import (
     wants_important_mail_help,
     wants_sales_mail_help,
     wants_spam_mail_help,
+    wants_order_mail_help,
     wants_meeting_calendar_help,
 )
 from app.google_calendar import GoogleCalendarClient
@@ -187,6 +189,14 @@ def _is_system_sender(addr: str) -> bool:
 def _select_reply_targets(emails: list[dict], limit: int) -> list[dict]:
     """First ``limit`` emails in the same order as the AI context (no filtering)."""
     return list(emails[:limit])
+
+
+def _is_no_match_answer(answer: str) -> bool:
+    normalized = (answer or "").strip().lower()
+    return normalized in {
+        "not available in current emails.",
+        "no, you don't have any emergency related emails.",
+    }
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -564,7 +574,10 @@ async def chat(
                 stale=stale,
             )
 
+    intent_filtered_query = False
+
     if wants_spam_mail_help(body.query):
+        intent_filtered_query = True
         emails = filter_spam_emails(emails)
         filtered_count = len(emails)
         if not emails:
@@ -577,8 +590,9 @@ async def chat(
                 tokens_used=0,
                 stale=stale,
             )
-    elif wants_sales_mail_help(body.query):
-        emails = filter_sales_emails(emails)
+    elif wants_order_mail_help(body.query):
+        intent_filtered_query = True
+        emails = filter_order_emails(emails)
         filtered_count = len(emails)
         if not emails:
             return ChatResponse(
@@ -590,7 +604,22 @@ async def chat(
                 tokens_used=0,
                 stale=stale,
             )
+    elif wants_sales_mail_help(body.query):
+        intent_filtered_query = True
+        emails = filter_sales_emails(emails)
+        filtered_count = len(emails)
+        if not emails:
+            return ChatResponse(
+                response="No sales emails found.",
+                request_id=request_id,
+                email_count=0,
+                filtered_count=0,
+                cache_age_s=cache_age_s,
+                tokens_used=0,
+                stale=stale,
+            )
     elif wants_important_mail_help(body.query):
+        intent_filtered_query = True
         emails = filter_important_emails(emails)
         filtered_count = len(emails)
         if not emails:
@@ -745,6 +774,21 @@ async def chat(
                 "request_id": request_id,
             },
         ) from None
+
+    if intent_filtered_query and _is_no_match_answer(answer):
+        return ChatResponse(
+            response=answer,
+            request_id=request_id,
+            email_count=0,
+            filtered_count=0,
+            cache_age_s=cache_age_s,
+            tokens_used=tokens_used,
+            priority_email_count=0,
+            other_email_count=0,
+            calendar_proposals=None,
+            email_actions=None,
+            stale=stale,
+        )
 
     email_actions_list: list[EmailReplyActionPayload] | None = None
     if prompt_emails:

@@ -30,6 +30,8 @@ def wants_important_mail_help(query: str) -> bool:
         "priority",
         "urgent",
         "critical",
+        "emergency",
+        "emergent",
         "must read",
         "must-read",
         "action items",
@@ -83,6 +85,49 @@ def filter_sales_emails(emails: list[dict]) -> list[dict]:
     for e in emails:
         text = f"{e.get('subject', '')}\n{e.get('body', '')}".lower()
         if any(h in text for h in sales_hints):
+            out.append(e)
+    return out
+
+
+def wants_order_mail_help(query: str) -> bool:
+    q = query.lower()
+    hints = (
+        "order",
+        "orders",
+        "product",
+        "purchase",
+        "invoice",
+        "billing",
+        "shipment",
+        "tracking",
+        "refund",
+        "subscription",
+    )
+    return any(h in q for h in hints)
+
+
+def filter_order_emails(emails: list[dict]) -> list[dict]:
+    order_hints = (
+        "order",
+        "ordered",
+        "order id",
+        "invoice",
+        "billing",
+        "payment",
+        "shipment",
+        "tracking",
+        "delivered",
+        "dispatch",
+        "purchase",
+        "refund",
+        "subscription",
+        "renewal",
+        "product",
+    )
+    out: list[dict] = []
+    for e in emails:
+        text = f"{e.get('subject', '')}\n{e.get('body', '')}".lower()
+        if any(h in text for h in order_hints):
             out.append(e)
     return out
 
