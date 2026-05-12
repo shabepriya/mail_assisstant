@@ -32,7 +32,7 @@ from app.meeting_parser import (
     TIME_PATTERN,
     extract_meeting_proposals_from_emails,
 )
-from app.gmail_api import fetch_thread_id, send_reply_via_service
+from app.gmail_api import fetch_thread_id
 from app.models import (
     CalendarProposalPayload,
     ChatRequest,
@@ -213,7 +213,7 @@ async def chat(
     session_id = _resolve_session_id(request, body)
     calendar_client = GoogleCalendarClient(client, settings)
 
-    if body.email_reply_action == "draft":
+    if body.email_reply_action == "reply":
         if not body.email_reply_action_id:
             return ChatResponse(
                 response="Missing reply action id.",
@@ -265,7 +265,7 @@ async def chat(
             reply_composer=composer,
         )
 
-    if body.email_reply_action == "open":
+    if body.email_reply_action == "view":
         if not body.email_reply_action_id:
             return ChatResponse(
                 response="Missing reply action id.",
@@ -285,30 +285,8 @@ async def chat(
                 cache_age_s=0.0,
                 tokens_used=0,
             )
-        try:
-            draft_body = await generate_reply_draft(
-                settings,
-                from_addr=snap.from_addr,
-                subject=snap.subject,
-                body_plain=snap.body_plain,
-            )
-        except Exception:
-            logger.exception("open_view_draft_failed request_id=%s", request_id)
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail={
-                    "error": "AI service temporarily unavailable.",
-                    "request_id": request_id,
-                },
-            ) from None
-        composer = ReplyComposerPayload(
-            action_id=snap.action_id,
-            to=snap.from_addr,
-            subject=_reply_subject_line(snap.subject),
-            body=draft_body,
-        )
         return ChatResponse(
-            response="Opened email with editable reply.",
+            response="Opened email.",
             request_id=request_id,
             email_count=0,
             filtered_count=0,
@@ -320,82 +298,6 @@ async def chat(
                 subject=snap.subject,
                 body=snap.body_plain,
             ),
-            reply_composer=composer,
-        )
-
-    if body.email_reply_action == "send":
-        if not body.email_reply_action_id:
-            return ChatResponse(
-                response="Missing reply action id.",
-                request_id=request_id,
-                email_count=0,
-                filtered_count=0,
-                cache_age_s=0.0,
-                tokens_used=0,
-            )
-        snap = await reply_store.get(session_id, body.email_reply_action_id)
-        if not snap:
-            return ChatResponse(
-                response="That reply action is no longer available. Please ask again.",
-                request_id=request_id,
-                email_count=0,
-                filtered_count=0,
-                cache_age_s=0.0,
-                tokens_used=0,
-            )
-        to_addr = (body.reply_to or "").strip()
-        subj = (body.reply_subject or "").strip()
-        body_txt = (body.reply_body or "").strip()
-        if not to_addr or not subj or not body_txt:
-            return ChatResponse(
-                response="Please fill To, Subject, and Body before sending.",
-                request_id=request_id,
-                email_count=0,
-                filtered_count=0,
-                cache_age_s=0.0,
-                tokens_used=0,
-            )
-        thread_id = (snap.thread_id or "").strip()
-        if not thread_id and snap.email_id:
-            fetched = await fetch_thread_id(client, settings, message_id=snap.email_id)
-            thread_id = (fetched or "").strip()
-            if thread_id:
-                logger.info(
-                    "thread_id_resolved_lazily email_id=%s thread_id=%s",
-                    snap.email_id,
-                    thread_id,
-                )
-            else:
-                logger.warning(
-                    "thread_id_unresolved email_id=%s — reply may start a new thread",
-                    snap.email_id,
-                )
-
-        ok, err_msg = await send_reply_via_service(
-            client,
-            settings,
-            to=to_addr,
-            subject=subj,
-            content=body_txt,
-            thread_id=thread_id,
-        )
-        if not ok:
-            return ChatResponse(
-                response=err_msg,
-                request_id=request_id,
-                email_count=0,
-                filtered_count=0,
-                cache_age_s=0.0,
-                tokens_used=0,
-            )
-        await reply_store.delete(session_id, body.email_reply_action_id)
-        return ChatResponse(
-            response=f"Email sent successfully to {to_addr} ✅",
-            request_id=request_id,
-            email_count=0,
-            filtered_count=0,
-            cache_age_s=0.0,
-            tokens_used=0,
         )
 
     if body.calendar_action in {"approve", "dismiss"}:

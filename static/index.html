@@ -496,46 +496,9 @@
       rowBtn.style.display = "flex";
       rowBtn.style.gap = "8px";
       rowBtn.style.marginTop = "10px";
-      const sendBtn = document.createElement("button");
-      sendBtn.textContent = "Send";
-      sendBtn.className = "primary";
-      sendBtn.onclick = async () => {
-        sendBtn.disabled = true;
-        try {
-          const res2 = await fetch("/ai/chat", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              query: "",
-              force_refresh: false,
-              client_session_id: clientSessionId,
-              email_reply_action: "send",
-              email_reply_action_id: c.action_id,
-              reply_to: toIn.value.trim(),
-              reply_subject: subIn.value.trim(),
-              reply_body: bodyTa.value,
-            }),
-          });
-          const d2 = await res2.json().catch(() => ({}));
-          if (!res2.ok) {
-            alert((d2.error || d2.detail || res2.statusText) + "");
-            sendBtn.disabled = false;
-            return;
-          }
-          hostEl.innerHTML = "";
-          const done = document.createElement("div");
-          done.style.fontSize = "13px";
-          done.textContent = d2.response || "Done.";
-          hostEl.appendChild(done);
-        } catch (err) {
-          alert("Network error: " + err);
-          sendBtn.disabled = false;
-        }
-      };
       const cancelBtn = document.createElement("button");
-      cancelBtn.textContent = "Cancel";
+      cancelBtn.textContent = "Close";
       cancelBtn.onclick = () => { hostEl.innerHTML = ""; };
-      rowBtn.appendChild(sendBtn);
       rowBtn.appendChild(cancelBtn);
       box.appendChild(rowBtn);
       hostEl.appendChild(box);
@@ -612,7 +575,7 @@
             query: "",
             force_refresh: false,
             client_session_id: clientSessionId,
-            email_reply_action: "draft",
+            email_reply_action: "reply",
             email_reply_action_id: actionId,
           }),
         });
@@ -657,7 +620,7 @@
             query: "",
             force_refresh: false,
             client_session_id: clientSessionId,
-            email_reply_action: "open",
+            email_reply_action: "view",
             email_reply_action_id: actionId,
           }),
         });
