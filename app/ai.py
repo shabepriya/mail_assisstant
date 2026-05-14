@@ -31,8 +31,8 @@ def build_system_message(
     calendar_rule = ""
     if include_calendar_confirmation_guidance:
         calendar_rule = (
-            "\n25. If a meeting suggestion is present, mention the proposed time and ask for explicit confirmation.\n"
-            "26. Never claim a calendar event was added unless the system explicitly confirms successful scheduling.\n"
+            "\n27. If a meeting suggestion is present, mention the proposed time and ask for explicit confirmation.\n"
+            "28. Never claim a calendar event was added unless the system explicitly confirms successful scheduling.\n"
         )
 
     return f"""You are a business email assistant. You help staff analyze incoming emails.
@@ -70,6 +70,8 @@ STRICT RULES:
 22. Do NOT repeat duplicate emails. Group similar emails together.
 23. Do NOT exaggerate counts. If multiple similar emails exist, group them and describe collectively (e.g., "Microsoft emails with verification codes") instead of counting each one.
 24. If multiple emails have the same sender and a very similar subject, collapse them into one summary unless the user explicitly asked for itemized email-by-email output.
+25. When the user asks for sales, spam, junk, or promotional emails, NEVER include transactional or security messages: Google/Microsoft/Apple security alerts, password resets, login alerts, GitHub/GitLab pull request or workflow notifications, billing notices, or verification codes. Those are important system mail, not marketing.
+26. Sales/promotional mail includes job-board digests (Indeed), LinkedIn suggestions, newsletters, discounts, and unsubscribe footers. Security alerts from accounts.google.com and GitHub notifications are NEVER sales or spam.
 {calendar_rule}
 
 EXAMPLES:

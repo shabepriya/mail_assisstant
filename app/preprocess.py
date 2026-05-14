@@ -4,14 +4,23 @@ from datetime import UTC, datetime
 from bs4 import BeautifulSoup
 
 from app.datetime_utils import parse_received_at
+from app.filters import (
+    is_trusted_system_sender,
+)
 
 SENSITIVE_CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
 PRIORITY_KEYWORDS = (
     "otp",
     "verification",
+    "verification code",
     "login",
     "security",
+    "security alert",
+    "new sign-in",
+    "new sign in",
+    "sign-in attempt",
     "password",
+    "password reset",
     "interview",
     "hr",
     "deadline",
@@ -19,6 +28,8 @@ PRIORITY_KEYWORDS = (
     "urgent",
     "important",
     "schedule",
+    "pull request",
+    "billing notice",
 )
 
 
@@ -89,7 +100,9 @@ def sanitize_emails(emails: list[dict]) -> list[dict]:
 
         subject = str(cloned.get("subject", ""))
         text_blob = f"{subject}\n{redacted_body}".lower()
-        cloned["priority"] = any(keyword in text_blob for keyword in PRIORITY_KEYWORDS)
+        cloned["priority"] = is_trusted_system_sender(cloned) or any(
+            keyword in text_blob for keyword in PRIORITY_KEYWORDS
+        )
         sanitized.append(cloned)
     return sanitized
 

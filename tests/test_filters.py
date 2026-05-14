@@ -2,8 +2,11 @@ from app.filters import (
     extract_sender_query,
     filter_by_sender,
     filter_order_emails,
+    filter_promotional_emails,
     filter_sales_emails,
     filter_spam_emails,
+    is_protected_transactional_email,
+    is_trusted_system_sender,
     is_today_intent,
     resolve_query_limit,
     wants_important_mail_help,
@@ -108,7 +111,80 @@ def test_filter_spam_emails_matches_sender_or_body_hints() -> None:
         {"id": "3", "from": "boss@example.com", "subject": "Meeting", "body": "Please join"},
     ]
     out = filter_spam_emails(emails)
-    assert [e["id"] for e in out] == ["1", "2"]
+    assert [e["id"] for e in out] == ["2"]
+
+
+def test_filter_spam_excludes_google_security_alert() -> None:
+    emails = [
+        {
+            "id": "g1",
+            "from": "no-reply@accounts.google.com",
+            "subject": "Security alert",
+            "body": "A new sign-in to your Google Account was detected.",
+        },
+        {
+            "id": "p1",
+            "from": "updates-noreply@linkedin.com",
+            "subject": "LinkedIn digest",
+            "body": "People you may know",
+        },
+    ]
+    out = filter_spam_emails(emails)
+    assert [e["id"] for e in out] == ["p1"]
+
+
+def test_filter_sales_excludes_github_pr_notification() -> None:
+    emails = [
+        {
+            "id": "gh1",
+            "from": "notifications@github.com",
+            "subject": "[repo] Pull request merged: fix auth",
+            "body": "Your pull request was merged into main.",
+        },
+        {
+            "id": "in1",
+            "from": "alert@indeed.com",
+            "subject": "Better jobs are waiting for you",
+            "body": "Apply to new roles near you. Unsubscribe here.",
+        },
+    ]
+    out = filter_sales_emails(emails)
+    assert [e["id"] for e in out] == ["in1"]
+
+
+def test_filter_promotional_union_dedupes() -> None:
+    emails = [
+        {
+            "id": "d1",
+            "from": "hello@chess.com",
+            "subject": "Get Premium for Free",
+            "body": "Limited time offer — unsubscribe",
+        }
+    ]
+    out = filter_promotional_emails(emails)
+    assert len(out) == 1
+
+
+def test_is_protected_transactional_google_and_github() -> None:
+    assert is_protected_transactional_email(
+        {"from": "no-reply@accounts.google.com", "subject": "Security alert", "body": "new sign-in"}
+    )
+    assert is_protected_transactional_email(
+        {
+            "from": "notifications@github.com",
+            "subject": "Pull request merged",
+            "body": "merged into main",
+        }
+    )
+    assert not is_protected_transactional_email(
+        {"from": "alert@indeed.com", "subject": "Better jobs are waiting for you", "body": "apply now"}
+    )
+
+
+def test_is_trusted_system_sender() -> None:
+    assert is_trusted_system_sender({"from": "no-reply@accounts.google.com"})
+    assert is_trusted_system_sender({"from": "GitHub <notifications@github.com>"})
+    assert not is_trusted_system_sender({"from": "alert@indeed.com"})
 
 
 def test_resolve_query_limit_singular_cue_returns_one() -> None:

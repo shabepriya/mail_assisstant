@@ -17,6 +17,8 @@ def patch_ask_ai(monkeypatch: pytest.MonkeyPatch) -> None:
         priority_count: int | None = None,
         non_priority_count: int | None = None,
         include_calendar_confirmation_guidance: bool = False,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         assert email_count >= 0
         assert priority_count is None or priority_count >= 0
@@ -25,7 +27,7 @@ def patch_ask_ai(monkeypatch: pytest.MonkeyPatch) -> None:
             return "Not available in current emails."
         return "mocked-ai-response"
 
-    monkeypatch.setattr("app.routes.chat.ask_ai", fake_ask_ai)
+    monkeypatch.setattr("app.domain.ai_service.summarize_emails", fake_ask_ai)
 
 
 def test_chat_ok(client: TestClient, patch_ask_ai: None) -> None:
@@ -72,7 +74,7 @@ def test_chat_returns_empty_batch_message(
     async def _empty(*_a, **_k):
         return []
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _empty)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _empty)
     r = client.post("/ai/chat", json={"query": "summarize"})
     assert r.status_code == 200
     assert r.json()["response"] == "No emails found in the current batch."
@@ -129,6 +131,8 @@ def test_chat_sanitize_layer_deduplicates_and_validates_output(
         priority_count: int | None = None,
         non_priority_count: int | None = None,
         include_calendar_confirmation_guidance: bool = False,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         assert email_count == 1
         assert priority_count == 1
@@ -136,8 +140,8 @@ def test_chat_sanitize_layer_deduplicates_and_validates_output(
         assert context.count("Email #") == 1
         return "As an AI language model,\nYour login code is 123456."
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _dupes)
-    monkeypatch.setattr("app.routes.chat.ask_ai", _fake_ask_ai)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _dupes)
+    monkeypatch.setattr("app.domain.ai_service.ask_ai", _fake_ask_ai)
 
     r = client.post("/ai/chat", json={"query": "summarize"})
     assert r.status_code == 200
@@ -160,7 +164,7 @@ def test_chat_returns_calendar_proposals_for_meeting_query(
             }
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _meetings)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _meetings)
 
     r = client.post(
         "/ai/chat",
@@ -187,7 +191,7 @@ def test_chat_calendar_dismiss_flow(
             }
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _meetings)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _meetings)
     first = client.post(
         "/ai/chat",
         json={"query": "any meeting tomorrow?", "client_session_id": "sess-b"},
@@ -228,7 +232,7 @@ def test_chat_calendar_approve_flow(
     async def _fake_create_event(self, **_kwargs):
         return _Result()
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _meetings)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _meetings)
     monkeypatch.setattr(
         "app.google_calendar.GoogleCalendarClient.create_event",
         _fake_create_event,
@@ -275,13 +279,15 @@ def test_chat_ai_fallback_calendar_proposal_requires_time_and_date(
         priority_count: int | None = None,
         non_priority_count: int | None = None,
         include_calendar_confirmation_guidance: bool = False,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         return "You have a meeting tomorrow at 9 PM."
 
     monkeypatch.setenv("CALENDAR_SCHEDULING_ENABLED", "true")
     get_settings.cache_clear()
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
-    monkeypatch.setattr("app.routes.chat.ask_ai", _fallback_ai)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.ai_service.summarize_emails", _fallback_ai)
 
     r = client.post(
         "/ai/chat",
@@ -314,7 +320,7 @@ def test_chat_important_mail_without_today_still_gets_reply_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -347,8 +353,8 @@ def test_chat_important_today_returns_email_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
-    monkeypatch.setattr("app.routes.chat.filter_today", lambda emails, tz: list(emails))
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.filter_today", lambda emails, tz: list(emails))
 
     r = client.post(
         "/ai/chat",
@@ -383,8 +389,8 @@ def test_chat_important_today_fallback_uses_latest_two_when_no_priority(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
-    monkeypatch.setattr("app.routes.chat.filter_today", lambda emails, tz: list(emails))
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.filter_today", lambda emails, tz: list(emails))
 
     r = client.post(
         "/ai/chat",
@@ -411,8 +417,8 @@ def test_chat_reply_draft_and_send_via_gmail_service(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
-    monkeypatch.setattr("app.routes.chat.filter_today", lambda emails, tz: list(emails))
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.filter_today", lambda emails, tz: list(emails))
 
     first = client.post(
         "/ai/chat",
@@ -426,10 +432,12 @@ def test_chat_reply_draft_and_send_via_gmail_service(
         from_addr: str,
         subject: str,
         body_plain: str,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         return "Mock draft body."
 
-    monkeypatch.setattr("app.routes.chat.generate_reply_draft", _fake_draft)
+    monkeypatch.setattr("app.domain.ai_service.draft_reply", _fake_draft)
 
     d = client.post(
         "/ai/chat",
@@ -452,7 +460,7 @@ def test_chat_reply_draft_and_send_via_gmail_service(
         captured["thread_id"] = thread_id
         return (True, "")
 
-    monkeypatch.setattr("app.routes.chat.send_reply_via_service", _fake_send)
+    monkeypatch.setattr("app.domain.reply_service.send_reply_via_service", _fake_send)
 
     sent = client.post(
         "/ai/chat",
@@ -487,8 +495,8 @@ def test_chat_reply_send_resolves_thread_id_lazily(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
-    monkeypatch.setattr("app.routes.chat.filter_today", lambda emails, tz: list(emails))
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.filter_today", lambda emails, tz: list(emails))
 
     first = client.post(
         "/ai/chat",
@@ -502,10 +510,12 @@ def test_chat_reply_send_resolves_thread_id_lazily(
         from_addr: str,
         subject: str,
         body_plain: str,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         return "Draft."
 
-    monkeypatch.setattr("app.routes.chat.generate_reply_draft", _fake_draft)
+    monkeypatch.setattr("app.domain.ai_service.draft_reply", _fake_draft)
 
     client.post(
         "/ai/chat",
@@ -521,7 +531,7 @@ def test_chat_reply_send_resolves_thread_id_lazily(
         assert message_id == "r1"
         return "thr_xyz"
 
-    monkeypatch.setattr("app.routes.chat.fetch_thread_id", _fake_fetch_thread)
+    monkeypatch.setattr("app.domain.reply_service.fetch_thread_id", _fake_fetch_thread)
 
     captured: dict[str, str] = {}
 
@@ -529,7 +539,7 @@ def test_chat_reply_send_resolves_thread_id_lazily(
         captured["thread_id"] = thread_id
         return (True, "")
 
-    monkeypatch.setattr("app.routes.chat.send_reply_via_service", _fake_send)
+    monkeypatch.setattr("app.domain.reply_service.send_reply_via_service", _fake_send)
 
     sent = client.post(
         "/ai/chat",
@@ -562,8 +572,8 @@ def test_chat_reply_send_failure_keeps_snapshot(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
-    monkeypatch.setattr("app.routes.chat.filter_today", lambda emails, tz: list(emails))
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.filter_today", lambda emails, tz: list(emails))
 
     first = client.post(
         "/ai/chat",
@@ -577,15 +587,17 @@ def test_chat_reply_send_failure_keeps_snapshot(
         from_addr: str,
         subject: str,
         body_plain: str,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         return "Draft body."
 
-    monkeypatch.setattr("app.routes.chat.generate_reply_draft", _fake_draft)
+    monkeypatch.setattr("app.domain.ai_service.draft_reply", _fake_draft)
 
     async def _fake_send_fail(*_a, **_k):
         return (False, "Your Gmail session has expired. Please reconnect your Gmail account.")
 
-    monkeypatch.setattr("app.routes.chat.send_reply_via_service", _fake_send_fail)
+    monkeypatch.setattr("app.domain.reply_service.send_reply_via_service", _fake_send_fail)
 
     sent = client.post(
         "/ai/chat",
@@ -636,7 +648,7 @@ def test_chat_attaches_reply_actions_for_any_query_with_emails(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -669,7 +681,7 @@ def test_chat_spam_query_no_match_returns_no_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -709,7 +721,7 @@ def test_chat_spam_query_matches_only_spam_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -743,7 +755,7 @@ def test_chat_sales_query_no_match_returns_specific_message_and_no_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -776,7 +788,7 @@ def test_chat_order_query_no_match_returns_no_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -816,7 +828,7 @@ def test_chat_order_query_matches_only_order_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -843,7 +855,7 @@ def test_chat_emergency_query_no_match_returns_no_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -878,11 +890,13 @@ def test_chat_important_ai_no_match_answer_suppresses_actions(
         priority_count: int | None = None,
         non_priority_count: int | None = None,
         include_calendar_confirmation_guidance: bool = False,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         return "Not available in current emails."
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
-    monkeypatch.setattr("app.routes.chat.ask_ai", _force_no_match)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.ai_service.summarize_emails", _force_no_match)
 
     r = client.post(
         "/ai/chat",
@@ -916,7 +930,7 @@ def test_chat_includes_system_senders_with_can_reply_false(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -953,7 +967,7 @@ def test_chat_includes_system_senders_with_display_name_can_reply_false(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -990,7 +1004,7 @@ def test_chat_includes_empty_subject_in_reply_actions(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -1023,7 +1037,7 @@ def test_chat_caps_reply_actions_at_max(
 
     monkeypatch.setenv("REPLY_ACTION_MAX", "3")
     get_settings.cache_clear()
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -1049,7 +1063,7 @@ def test_chat_query_last_mail_returns_one_action(
             for i in range(1, 6)
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -1080,7 +1094,7 @@ def test_chat_query_summarize_last_5_returns_five(
             for i in range(1, 8)
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     r = client.post(
         "/ai/chat",
@@ -1121,7 +1135,7 @@ def test_chat_open_action_returns_view_and_composer(
             },
         ]
 
-    monkeypatch.setattr("app.routes.chat.fetch_emails", _emails)
+    monkeypatch.setattr("app.domain.email_pipeline.fetch_emails", _emails)
 
     first = client.post(
         "/ai/chat",
@@ -1135,10 +1149,12 @@ def test_chat_open_action_returns_view_and_composer(
         from_addr: str,
         subject: str,
         body_plain: str,
+        correlation_id: str | None = None,
+        **kwargs,
     ) -> str:
         return "Mock draft"
 
-    monkeypatch.setattr("app.routes.chat.generate_reply_draft", _mock_draft)
+    monkeypatch.setattr("app.domain.ai_service.draft_reply", _mock_draft)
 
     r = client.post(
         "/ai/chat",

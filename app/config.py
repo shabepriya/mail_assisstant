@@ -85,10 +85,17 @@ class Settings(BaseSettings):
         default="http://localhost:8000,http://127.0.0.1:8000",
         validation_alias="CORS_ORIGINS",
     )
+    tool_service_api_keys: str = Field(default="", validation_alias="TOOL_SERVICE_API_KEYS")
+    tool_require_auth: bool = Field(default=False, validation_alias="TOOL_REQUIRE_AUTH")
+    approval_signing_secret: str = Field(default="", validation_alias="APPROVAL_SIGNING_SECRET")
 
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    @property
+    def tool_service_api_keys_list(self) -> list[str]:
+        return [k.strip() for k in self.tool_service_api_keys.split(",") if k.strip()]
 
 
 @lru_cache

@@ -6,6 +6,7 @@ from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from app.api.v1.router import router as v1_router
 from app.cache import EmailCache
 from app.config import get_settings
 from app.logging_config import setup_logging
@@ -13,6 +14,7 @@ from app.pending_calendar import PendingCalendarStore
 from app.pending_reply import PendingReplyStore
 from app.routes import chat as chat_routes
 from app.routes import health as health_routes
+from app.security.idempotency import IdempotencyStore
 
 
 @asynccontextmanager
@@ -23,6 +25,7 @@ async def lifespan(app: FastAPI):
     app.state.cache = EmailCache(settings.cache_ttl_seconds)
     app.state.pending_calendar = PendingCalendarStore(settings.calendar_pending_ttl_seconds)
     app.state.pending_reply = PendingReplyStore(settings.reply_pending_ttl_seconds)
+    app.state.idempotency = IdempotencyStore()
     app.state.start = time.monotonic()
     yield
     await app.state.http_client.aclose()
@@ -55,6 +58,7 @@ async def http_exception_handler(_request: Request, exc: HTTPException) -> JSONR
 
 app.include_router(health_routes.router)
 app.include_router(chat_routes.router)
+app.include_router(v1_router)
 
 
 @app.get("/")

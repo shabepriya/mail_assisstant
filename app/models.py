@@ -9,7 +9,7 @@ class ChatRequest(BaseModel):
     client_session_id: str | None = Field(default=None, max_length=128)
     calendar_action: Literal["none", "approve", "dismiss"] | None = None
     calendar_proposal_id: str | None = Field(default=None, max_length=128)
-    email_reply_action: Literal["reply", "view"] | None = None
+    email_reply_action: Literal["reply", "view", "draft", "send", "open"] | None = None
     email_reply_action_id: str | None = Field(default=None, max_length=128)
     reply_to: str | None = Field(default=None, max_length=320)
     reply_subject: str | None = Field(default=None, max_length=500)
