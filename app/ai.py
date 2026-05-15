@@ -1,137 +1,133 @@
-import asyncio
-import logging
-import re
-from datetime import datetime
-from zoneinfo import ZoneInfo
+from __future__ import annotations
 
-from google import genai
-from google.genai import types
-from google.genai.errors import APIError
+import logging
+
+import httpx
 
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
-SENSITIVE_CODE_PATTERN = re.compile(r"\b\d{4,8}\b")
+
+_OPENCLAW_AGENT_MODEL = "openclaw"
 
 
-def build_system_message(
-    settings: Settings,
-    email_count: int,
-    *,
-    priority_count: int | None = None,
-    non_priority_count: int | None = None,
-    include_calendar_confirmation_guidance: bool = False,
-) -> str:
-    tz = settings.user_timezone
-    try:
-        today_local = datetime.now(ZoneInfo(tz)).strftime("%Y-%m-%d")
-    except Exception:
-        today_local = datetime.now().strftime("%Y-%m-%d")
+def _openclaw_timeout(settings: Settings) -> httpx.Timeout:
+    read_s = max(5.0, float(settings.openclaw_timeout))
+    return httpx.Timeout(connect=10.0, read=read_s, write=30.0, pool=10.0)
 
-    calendar_rule = ""
-    if include_calendar_confirmation_guidance:
-        calendar_rule = (
-            "\n27. If a meeting suggestion is present, mention the proposed time and ask for explicit confirmation.\n"
-            "28. Never claim a calendar event was added unless the system explicitly confirms successful scheduling.\n"
+
+def _openclaw_headers(settings: Settings) -> dict[str, str]:
+    headers: dict[str, str] = {
+        "Content-Type": "application/json",
+        "x-openclaw-scopes": "operator.write",
+    }
+    token = (settings.openclaw_gateway_token or "").strip()
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    model_override = settings.openclaw_backend_model.strip()
+    if model_override:
+        headers["x-openclaw-model"] = model_override
+    return headers
+
+
+def _openclaw_chat_url(settings: Settings) -> str:
+    base = settings.openclaw_base_url.rstrip("/")
+    return f"{base}/v1/chat/completions"
+
+
+def _extract_chat_content(data: object) -> str:
+    if not isinstance(data, dict):
+        return "No response from agent."
+    choices = data.get("choices")
+    if not isinstance(choices, list) or not choices:
+        return "No response from agent."
+    first = choices[0]
+    if not isinstance(first, dict):
+        return "No response from agent."
+    message = first.get("message")
+    if not isinstance(message, dict):
+        return "No response from agent."
+    content = message.get("content")
+    if isinstance(content, str) and content.strip():
+        return content.strip()
+    return "No response from agent."
+
+
+def _openclaw_error_message(exc: Exception, settings: Settings) -> str:
+    base = settings.openclaw_base_url.rstrip("/")
+    if isinstance(exc, httpx.ConnectError):
+        return (
+            f"OpenClaw gateway is not reachable at {base}. "
+            "Start it on this machine (for example: openclaw gateway), then try again."
         )
-
-    return f"""You are a business email assistant. You help staff analyze incoming emails.
-
-STRICT RULES:
-1. Use ONLY the emails provided below. Do NOT use outside knowledge.
-2. If the answer is not contained in the provided emails, respond exactly:
-   "Not available in current emails."
-3. Do NOT assume, infer, or fabricate any information not explicitly stated.
-4. Do NOT include or cite the internal email numbers (e.g. "Email #1", "Email #2") in your response. Refer to the emails by their sender or subject instead.
-5. Mention branch and account names ONLY if explicitly present in the email.
-6. Be concise. No filler text.
-7. Do NOT repeat full email content unless the user explicitly asks for the full text of a specific email.
-8. Sender names and email subjects are NOT sensitive — always include them in responses. Only avoid exposing phone numbers, physical addresses, or private personal data unless explicitly asked.
-9. DO NOT group emails together unless explicitly asked. Always list the exact number of emails requested as separate bullet points.
-10. When counting emails, give exact numbers (e.g. "2 emails from X").
-11. Answer ONLY what the user asked. Do not add unrelated explanation or topics.
-12. Do not add advice unless it is explicitly mentioned in the email.
-13. If the user asks about a single email, respond in a natural paragraph (no bullet points, no labels like From/Subject).
-14. If the user asks about multiple emails, respond with short bullet points (one line per email).
-15. Do NOT include "From:", "Subject:", or "Summary:" labels in the output.
-16. Write summaries in a human-friendly, natural tone (like how a person would speak). Avoid robotic phrases like "Here are..." or "The following..."
-17. Ensure responses are complete and not cut off.
-18. For sender-based queries (e.g., "any mail from LinkedIn"):
-    - Do NOT include email addresses or "Subject" lines.
-    - Summarize each email in natural language.
-    - Do NOT repeat the sender's name in every bullet if it's already implied by the user's question. (e.g., if asked for GitHub emails, say "A security alert providing..." instead of "GitHub email...").
-    - Use short bullet points.
-19. "Priority" or "Urgent" emails ONLY include security alerts, direct messages from people, or critical account updates. Social media notifications (Instagram, LinkedIn, Facebook), project collaboration invites, newsletters, and marketing are NEVER priority.
-20. NEVER include raw email addresses (e.g., noreply@..., notifications@...) in any response unless the user explicitly asks for them.
-21. When answering yes/no or priority questions (e.g., "any priority mails?"):
-    - Start with a natural human response like: "Yes, you have a few priority emails." OR "No, you don't have any priority emails."
-    - Strictly exclude social media, promotions, and non-critical updates from priority.
-    - Avoid robotic phrases like "Here are..." or "The following..."
-22. Do NOT repeat duplicate emails. Group similar emails together.
-23. Do NOT exaggerate counts. If multiple similar emails exist, group them and describe collectively (e.g., "Microsoft emails with verification codes") instead of counting each one.
-24. If multiple emails have the same sender and a very similar subject, collapse them into one summary unless the user explicitly asked for itemized email-by-email output.
-25. When the user asks for sales, spam, junk, or promotional emails, NEVER include transactional or security messages: Google/Microsoft/Apple security alerts, password resets, login alerts, GitHub/GitLab pull request or workflow notifications, billing notices, or verification codes. Those are important system mail, not marketing.
-26. Sales/promotional mail includes job-board digests (Indeed), LinkedIn suggestions, newsletters, discounts, and unsubscribe footers. Security alerts from accounts.google.com and GitHub notifications are NEVER sales or spam.
-{calendar_rule}
-
-EXAMPLES:
-User: summarize last 3 emails
-Assistant:
-- GitHub email with a sudo authentication code.
-- Postman email about Enterprise trial access levels.
-- LinkedIn suggestion to connect with Hitesh Murthy.S.
-
-User: what is my last mail?
-Assistant:
-Your latest email is about a security login alert, informing you of a new device login and advising you to take action if it wasn't you.
-
-Current batch: {email_count} emails loaded (up to last {settings.max_emails}).
-FACTS FROM SERVER (trust these counts): priority_tagged={priority_count if priority_count is not None else "unknown"}, other={non_priority_count if non_priority_count is not None else "unknown"}. Do not contradict these counts; explain using the emails.
-Today (local): {today_local}  |  Timezone: {tz}
-"""
+    if isinstance(exc, httpx.TimeoutException):
+        return (
+            f"OpenClaw gateway at {base} did not respond within "
+            f"{int(settings.openclaw_timeout)}s. "
+            "Check that the gateway is running and model auth is configured "
+            "(openclaw models auth)."
+        )
+    if isinstance(exc, httpx.HTTPStatusError):
+        status = exc.response.status_code
+        body = exc.response.text[:500].strip()
+        body_lower = body.lower()
+        if status == 401:
+            if "gateway" in body_lower and "token" in body_lower:
+                return (
+                    "OpenClaw gateway rejected the token. "
+                    "Set OPENCLAW_GATEWAY_TOKEN in mail_assistant/.env to match "
+                    "gateway.auth.token in ~/.openclaw/openclaw.json."
+                )
+            return (
+                "OpenClaw has no API key for the selected model provider. "
+                f"Run: openclaw models auth login --provider google "
+                f"(using GEMINI_API_KEY), or set models.providers.google.apiKey "
+                f"in ~/.openclaw/openclaw.json. Details: {body[:200]}"
+            )
+        if status == 404 and "unknown model" in body_lower:
+            return (
+                f"OpenClaw does not recognize model '{settings.openclaw_backend_model}'. "
+                "Set OPENCLAW_MODEL_OVERRIDE in mail_assistant/.env to a model from "
+                "`openclaw models list`, then restart the gateway."
+            )
+        if status == 404:
+            return (
+                "OpenClaw /v1/chat/completions is not enabled. "
+                "Set gateway.http.endpoints.chatCompletions.enabled to true "
+                "in ~/.openclaw/openclaw.json and restart the gateway."
+            )
+        detail = f" ({body})" if body else ""
+        return f"OpenClaw gateway returned HTTP {status}{detail}."
+    return "Error: Could not reach OpenClaw agent."
 
 
-def build_user_message(context: str, query: str) -> str:
-    return f"""Emails:
-{context}
-
-Question: {query}
-"""
-
-
-def estimate_overhead_tokens(
+async def _openclaw_chat_completion(
     settings: Settings,
-    query: str,
     *,
-    priority_count: int | None = None,
-    non_priority_count: int | None = None,
-    include_calendar_confirmation_guidance: bool = False,
-) -> int:
-    from app.tokens import count_tokens
+    system_prompt: str,
+    user_prompt: str,
+    max_tokens: int | None = None,
+) -> str:
+    url = _openclaw_chat_url(settings)
+    payload: dict[str, object] = {
+        "model": _OPENCLAW_AGENT_MODEL,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+    }
+    if max_tokens is not None:
+        payload["max_tokens"] = max_tokens
 
-    sys_t = build_system_message(
-        settings,
-        email_count=0,
-        priority_count=priority_count,
-        non_priority_count=non_priority_count,
-        include_calendar_confirmation_guidance=include_calendar_confirmation_guidance,
-    )
-    wrap = f"""Emails:
-
-
-Question: {query}"""
-    return count_tokens(sys_t, settings.gemini_model) + count_tokens(
-        wrap, settings.gemini_model
-    )
-
-
-def validate_ai_output(text: str) -> str:
-    cleaned = str(text or "").strip()
-    cleaned = SENSITIVE_CODE_PATTERN.sub("[REDACTED_CODE]", cleaned)
-    if cleaned.lower().startswith("as an ai"):
-        parts = cleaned.split("\n", 1)
-        cleaned = parts[1].strip() if len(parts) > 1 else ""
-    return cleaned
+    async with httpx.AsyncClient(timeout=_openclaw_timeout(settings)) as client:
+        response = await client.post(
+            url,
+            json=payload,
+            headers=_openclaw_headers(settings),
+        )
+        response.raise_for_status()
+        return _extract_chat_content(response.json())
 
 
 async def ask_ai(
@@ -144,64 +140,29 @@ async def ask_ai(
     non_priority_count: int | None = None,
     include_calendar_confirmation_guidance: bool = False,
 ) -> str:
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is not set")
-
-    client = genai.Client(api_key=settings.gemini_api_key)
-    system = build_system_message(
-        settings,
-        email_count=email_count,
-        priority_count=priority_count,
-        non_priority_count=non_priority_count,
-        include_calendar_confirmation_guidance=include_calendar_confirmation_guidance,
+    _ = (email_count, priority_count, non_priority_count, include_calendar_confirmation_guidance)
+    system_prompt = (
+        "You are a helpful email assistant. "
+        "Answer using only the email context provided. Be concise."
     )
-    user = build_user_message(context, query)
-
-    config = types.GenerateContentConfig(
-        system_instruction=system,
-        max_output_tokens=settings.gemini_max_tokens,
-    )
-
-    last_exc: Exception | None = None
+    user_prompt = f"Emails Context:\n{context}\n\nQuestion: {query}"
     try:
-        for attempt in range(3):
-            try:
-                resp = await client.aio.models.generate_content(
-                    model=settings.gemini_model,
-                    contents=user,
-                    config=config,
-                )
-                return resp.text or ""
-            except APIError as e:
-                # 429 is resource exhausted for Gemini
-                if getattr(e, "code", None) == 429 or "429" in str(e):
-                    last_exc = e
-                    wait_s = 0.5 * (2**attempt)
-                    logger.warning(
-                        "gemini_rate_limit attempt=%s wait_s=%s",
-                        attempt + 1,
-                        wait_s,
-                    )
-                    await asyncio.sleep(wait_s)
-                else:
-                    raise e
-    except Exception as e:
-        last_exc = e
-
-    if last_exc:
-        raise last_exc
-
-    return ""
-
-
-REPLY_DRAFT_SYSTEM = """You write ONLY the body of a professional email reply.
-Rules:
-- Base every sentence ONLY on the Original email below. Do not invent facts, dates, meetings, or agreements.
-- Do not confirm anything not explicitly stated by the sender.
-- If something important is missing, use neutral wording or one short clarifying question.
-- Do not include Subject or To lines. No markdown code fences. Plain text only.
-- Keep it concise (under 200 words).
-"""
+        return await _openclaw_chat_completion(
+            settings,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=settings.gemini_max_tokens,
+        )
+    except httpx.HTTPStatusError as exc:
+        logger.warning(
+            "openclaw_ask_http_error url=%s status=%s",
+            _openclaw_chat_url(settings),
+            exc.response.status_code,
+        )
+        return _openclaw_error_message(exc, settings)
+    except Exception as exc:
+        logger.warning("openclaw_ask_failed url=%s error=%s", _openclaw_chat_url(settings), exc)
+        return _openclaw_error_message(exc, settings)
 
 
 async def generate_reply_draft(
@@ -211,40 +172,21 @@ async def generate_reply_draft(
     subject: str,
     body_plain: str,
 ) -> str:
-    """Return plain-text reply body only (no subject/to lines)."""
-    if not settings.gemini_api_key:
-        raise RuntimeError("GEMINI_API_KEY is not set")
-
-    client = genai.Client(api_key=settings.gemini_api_key)
-    user = (
-        f"Original email From line: {from_addr}\n"
-        f"Subject: {subject}\n"
-        f"Body:\n{body_plain}\n\n"
-        "Write the reply body only."
+    system_prompt = "You write ONLY the body of a professional email reply."
+    user_prompt = (
+        f"Draft a reply to: {from_addr}\nSubject: {subject}\nBody: {body_plain}"
     )
-    config = types.GenerateContentConfig(
-        system_instruction=REPLY_DRAFT_SYSTEM,
-        max_output_tokens=min(512, settings.gemini_max_tokens),
-    )
-    last_exc: Exception | None = None
-    for attempt in range(3):
-        try:
-            resp = await client.aio.models.generate_content(
-                model=settings.gemini_model,
-                contents=user,
-                config=config,
-            )
-            text = validate_ai_output(resp.text or "")
-            return text or "Thank you for your email. I will follow up shortly."
-        except APIError as e:
-            if getattr(e, "code", None) == 429 or "429" in str(e):
-                last_exc = e
-                await asyncio.sleep(0.5 * (2**attempt))
-            else:
-                raise e
-        except Exception as e:
-            last_exc = e
-            break
-    if last_exc:
-        raise last_exc
-    return "Thank you for your email. I will follow up shortly."
+    try:
+        return await _openclaw_chat_completion(
+            settings,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_tokens=min(settings.gemini_max_tokens, 800),
+        )
+    except Exception as exc:
+        logger.warning(
+            "openclaw_reply_draft_failed url=%s error=%s",
+            _openclaw_chat_url(settings),
+            exc,
+        )
+        return "Thank you for your email. I will follow up shortly."

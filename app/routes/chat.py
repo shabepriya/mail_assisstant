@@ -6,7 +6,7 @@ import logging
 
 from fastapi import APIRouter, Depends, Request
 
-from app.ai import ask_ai, estimate_overhead_tokens, generate_reply_draft, validate_ai_output
+from app.ai import ask_ai, generate_reply_draft
 from app.config import Settings, get_settings
 from app.domain.chat_service import run_chat_turn
 from app.email_client import EmailAPIError, fetch_emails
@@ -27,9 +27,7 @@ from app.gmail_api import fetch_thread_id, send_reply_via_service
 __all__ = [
     "router",
     "ask_ai",
-    "estimate_overhead_tokens",
     "generate_reply_draft",
-    "validate_ai_output",
     "fetch_emails",
     "EmailAPIError",
     "filter_today",

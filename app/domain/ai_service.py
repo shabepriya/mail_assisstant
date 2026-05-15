@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 
-from app.ai import ask_ai, estimate_overhead_tokens, generate_reply_draft, validate_ai_output
+from app.ai import ask_ai, generate_reply_draft
 from app.config import Settings
 
 logger = logging.getLogger(__name__)
@@ -31,7 +31,7 @@ async def summarize_emails(
         non_priority_count=non_priority_count,
         include_calendar_confirmation_guidance=include_calendar_confirmation_guidance,
     )
-    return validate_ai_output(answer)
+    return answer
 
 
 async def draft_reply(
@@ -59,10 +59,4 @@ def estimate_query_overhead(
     non_priority_count: int | None = None,
     include_calendar_confirmation_guidance: bool = False,
 ) -> int:
-    return estimate_overhead_tokens(
-        settings,
-        query,
-        priority_count=priority_count,
-        non_priority_count=non_priority_count,
-        include_calendar_confirmation_guidance=include_calendar_confirmation_guidance,
-    )
+    return 200

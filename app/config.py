@@ -17,6 +17,18 @@ class Settings(BaseSettings):
     gemini_timeout: float = Field(default=15.0, validation_alias="GEMINI_TIMEOUT")
     gemini_max_tokens: int = Field(default=300, validation_alias="GEMINI_MAX_TOKENS")
 
+    openclaw_base_url: str = Field(
+        default="http://127.0.0.1:18789", validation_alias="OPENCLAW_BASE_URL"
+    )
+    openclaw_gateway_token: str = Field(
+        default="openclaw", validation_alias="OPENCLAW_GATEWAY_TOKEN"
+    )
+    openclaw_timeout: float = Field(default=120.0, validation_alias="OPENCLAW_TIMEOUT")
+    #: Backend provider/model sent via x-openclaw-model (see OpenClaw OpenAI HTTP API docs).
+    openclaw_model_override: str = Field(
+        default="", validation_alias="OPENCLAW_MODEL_OVERRIDE"
+    )
+
     email_api_base_url: str = Field(
         default="http://localhost:8001", validation_alias="EMAIL_API_BASE_URL"
     )
@@ -88,6 +100,11 @@ class Settings(BaseSettings):
     tool_service_api_keys: str = Field(default="", validation_alias="TOOL_SERVICE_API_KEYS")
     tool_require_auth: bool = Field(default=False, validation_alias="TOOL_REQUIRE_AUTH")
     approval_signing_secret: str = Field(default="", validation_alias="APPROVAL_SIGNING_SECRET")
+
+    @property
+    def openclaw_backend_model(self) -> str:
+        """Non-empty only when OPENCLAW_MODEL_OVERRIDE is set (sent as x-openclaw-model)."""
+        return self.openclaw_model_override.strip()
 
     @property
     def cors_origins_list(self) -> list[str]:
